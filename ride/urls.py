@@ -3,7 +3,7 @@ from . import views
 
 app_name = 'ride'
 
+
 urlpatterns = [
-    path('create/', views.create_ride, name='create'),
-    path('confirm/', views.confirm_ride, name='confirm'),
+    path('book-ride/', views.ride_booking_view, name='book_ride'),
 ]
