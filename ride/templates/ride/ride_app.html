@@ -272,12 +272,43 @@
                     destination_lng: destinationLocation.lng
                 };
 
-                console.log("Ride Request Data:", rideData);
-                showMessageBox("Ride requested! (This is a demo. Data logged to console.)");
+                fetch("/ride/api/submit/", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": getCookie("csrftoken")
+                    },
+                    body: JSON.stringify(rideData)
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === "success") {
+                        showMessageBox("Ride successfully requested!");
+                        console.log("Ride ID:", data.ride_id);
+                    } else {
+                        showMessageBox("Failed to request ride.");
+                    }
+                });
             } else {
                 showMessageBox("Please select both origin and destination on the map.");
             }
         }
+
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== "") {
+                const cookies = document.cookie.split(';');
+                for (let cookie of cookies) {
+                    const trimmed = cookie.trim();
+                    if (trimmed.startsWith(name + '=')) {
+                        cookieValue = decodeURIComponent(trimmed.slice(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+
     </script>
 </body>
 </html>
