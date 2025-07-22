@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="schedule-container">
+    <div class="card mb-4">
+        <div class="card-header bg-white">
+            <h3 class="mb-0">Schedule a Ride</h3>
+            <p class="text-muted mb-0">Plan your trip in advance</p>
+        </div>
+        <div class="card-body">
+            <form>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Pickup Location</label>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="fa-solid fa-location-dot"></i></span>
+                            <input type="text" class="form-control" placeholder="Current location">
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Destination</label>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="fa-solid fa-flag"></i></span>
+                            <input type="text" class="form-control" placeholder="Where to?">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Date</label>
+                        <input type="date" class="form-control">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Time</label>
+                        <input type="time" class="form-control">
+                    </div>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="form-label">Ride Type</label>
+                    <div class="d-flex flex-wrap gap-2">
+                        <input type="radio" class="btn-check" name="ride_type" id="sched-standard" autocomplete="off" checked>
+                        <label class="btn btn-outline-primary" for="sched-standard">
+                            <i class="fa-solid fa-car me-2"></i> Standard
+                        </label>
+                        
+                        <input type="radio" class="btn-check" name="ride_type" id="sched-premium" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="sched-premium">
+                            <i class="fa-solid fa-gem me-2"></i> Premium
+                        </label>
+                        
+                        <input type="radio" class="btn-check" name="ride_type" id="sched-group" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="sched-group">
+                            <i class="fa-solid fa-users me-2"></i> Group
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="d-flex justify-content-end">
+                    <button class="btn btn-primary px-4 py-2 fw-bold">
+                        <i class="fa-solid fa-calendar-check me-2"></i> Schedule Ride
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <div class="card">
+        <div class="card-header bg-white">
+            <h3 class="mb-0">Scheduled Rides</h3>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Date & Time</th>
+                            <th>Pickup</th>
+                            <th>Destination</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td colspan="6" class="text-center py-5">
+                                <i class="fa-solid fa-calendar-plus fa-3x text-muted mb-3"></i>
+                                <h5>No scheduled rides</h5>
+                                <p class="text-muted">Your scheduled rides will appear here</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
