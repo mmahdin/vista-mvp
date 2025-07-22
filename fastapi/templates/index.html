@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RideShare App</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            @apply bg-gray-100 text-gray-900 dark:bg-gray-900 dark:text-gray-100 transition-colors duration-300;
+        }
+        /* Custom scrollbar for better aesthetics */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        /* Dark mode scrollbar */
+        .dark ::-webkit-scrollbar-track {
+            background: #333;
+        }
+        .dark ::-webkit-scrollbar-thumb {
+            background: #666;
+        }
+        .dark ::-webkit-scrollbar-thumb:hover {
+            background: #888;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <!-- Login/Register Container -->
+    <div id="auth-container" class="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md transition-all duration-300 transform scale-100 opacity-100">
+        <h2 class="text-3xl font-bold text-center mb-6 text-gray-800 dark:text-white">Welcome to RideShare</h2>
+
+        <!-- Message Box -->
+        <div id="message-box" class="hidden p-3 mb-4 rounded-lg text-sm text-center" role="alert"></div>
+
+        <!-- Login Form -->
+        <form id="login-form" class="space-y-4">
+            <div>
+                <label for="login-username" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Username</label>
+                <input type="text" id="login-username" name="username" required
+                       class="mt-1 block w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-white transition-colors duration-200">
+            </div>
+            <div>
+                <label for="login-password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+                <input type="password" id="login-password" name="password" required
+                       class="mt-1 block w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-white transition-colors duration-200">
+            </div>
+            <button type="submit"
+                    class="w-full py-3 px-4 rounded-lg bg-blue-600 text-white font-semibold shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-all duration-200 transform hover:scale-105">
+                Login
+            </button>
+        </form>
+
+        <p class="text-center text-sm text-gray-600 dark:text-gray-400 mt-6">
+            Don't have an account?
+            <a href="#" id="show-register" class="text-blue-600 hover:underline dark:text-blue-400">Register here</a>
+        </p>
+
+        <!-- Register Form (initially hidden) -->
+        <form id="register-form" class="space-y-4 hidden">
+            <div>
+                <label for="register-username" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Username</label>
+                <input type="text" id="register-username" name="username" required
+                       class="mt-1 block w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-white transition-colors duration-200">
+            </div>
+            <div>
+                <label for="register-password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+                <input type="password" id="register-password" name="password" required
+                       class="mt-1 block w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-white transition-colors duration-200">
+            </div>
+            <button type="submit"
+                    class="w-full py-3 px-4 rounded-lg bg-green-600 text-white font-semibold shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-all duration-200 transform hover:scale-105">
+                Register
+            </button>
+        </form>
+
+        <p class="text-center text-sm text-gray-600 dark:text-gray-400 mt-4 hidden" id="show-login-text">
+            Already have an account?
+            <a href="#" id="show-login" class="text-blue-600 hover:underline dark:text-blue-400">Login here</a>
+        </p>
+    </div>
+
+    <!-- Homepage Container (initially hidden) -->
+    <div id="homepage-container" class="hidden bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-4xl transition-all duration-300 transform scale-95 opacity-0">
+        <div class="flex justify-between items-center mb-6 border-b pb-4 border-gray-200 dark:border-gray-700">
+            <h2 class="text-3xl font-bold text-gray-800 dark:text-white">Dashboard</h2>
+            <div class="flex items-center space-x-4">
+                <span id="welcome-message" class="text-lg font-medium text-gray-700 dark:text-gray-300"></span>
+                <button id="logout-button" class="py-2 px-4 rounded-lg bg-red-600 text-white font-semibold shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-all duration-200">
+                    Logout
+                </button>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <button id="ride-option" class="flex flex-col items-center justify-center p-6 bg-blue-100 dark:bg-blue-900 rounded-xl shadow-md hover:shadow-lg transition-all duration-200 transform hover:-translate-y-1 hover:scale-105 cursor-pointer border-2 border-blue-200 dark:border-blue-800">
+                <svg class="w-12 h-12 text-blue-600 dark:text-blue-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.727A8 8 0 016.343 7.273L17.657 16.727zm0 0l.915.915a4 4 0 01-5.657 0l-.915-.915m5.657 0a4 4 0 00-5.657 0m0 0l-.915-.915a4 4 0 010-5.657l.915-.915m-5.657 0a4 4 0 000 5.657"></path></svg>
+                <span class="text-xl font-semibold text-blue-800 dark:text-blue-200">Ride</span>
+            </button>
+            <button id="schedule-option" class="flex flex-col items-center justify-center p-6 bg-green-100 dark:bg-green-900 rounded-xl shadow-md hover:shadow-lg transition-all duration-200 transform hover:-translate-y-1 hover:scale-105 cursor-pointer border-2 border-green-200 dark:border-green-800">
+                <svg class="w-12 h-12 text-green-600 dark:text-green-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                <span class="text-xl font-semibold text-green-800 dark:text-green-200">Schedule</span>
+            </button>
+            <button id="history-option" class="flex flex-col items-center justify-center p-6 bg-purple-100 dark:bg-purple-900 rounded-xl shadow-md hover:shadow-lg transition-all duration-200 transform hover:-translate-y-1 hover:scale-105 cursor-pointer border-2 border-purple-200 dark:border-purple-800">
+                <svg class="w-12 h-12 text-purple-600 dark:text-purple-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span class="text-xl font-semibold text-purple-800 dark:text-purple-200">History</span>
+            </button>
+        </div>
+
+        <!-- Content Display Area -->
+        <div id="content-display" class="bg-gray-50 dark:bg-gray-700 p-6 rounded-xl shadow-inner min-h-[200px] flex items-center justify-center text-gray-600 dark:text-gray-300 text-lg italic">
+            Select an option to see details.
+        </div>
+    </div>
+
+    <script>
+        const authContainer = document.getElementById('auth-container');
+        const homepageContainer = document.getElementById('homepage-container');
+        const loginForm = document.getElementById('login-form');
+        const registerForm = document.getElementById('register-form');
+        const showRegisterBtn = document.getElementById('show-register');
+        const showLoginBtn = document.getElementById('show-login');
+        const showLoginText = document.getElementById('show-login-text');
+        const welcomeMessage = document.getElementById('welcome-message');
+        const logoutButton = document.getElementById('logout-button');
+        const messageBox = document.getElementById('message-box');
+        const contentDisplay = document.getElementById('content-display');
+
+        const rideOption = document.getElementById('ride-option');
+        const scheduleOption = document.getElementById('schedule-option');
+        const historyOption = document.getElementById('history-option');
+
+        // Function to display messages
+        function showMessage(message, type = 'info') {
+            messageBox.textContent = message;
+            messageBox.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700', 'bg-blue-100', 'text-blue-700');
+            if (type === 'error') {
+                messageBox.classList.add('bg-red-100', 'text-red-700');
+            } else if (type === 'success') {
+                messageBox.classList.add('bg-green-100', 'text-green-700');
+            } else { // info
+                messageBox.classList.add('bg-blue-100', 'text-blue-700');
+            }
+            messageBox.classList.remove('hidden');
+            setTimeout(() => {
+                messageBox.classList.add('hidden');
+            }, 5000); // Hide after 5 seconds
+        }
+
+        // Function to toggle between login and register forms
+        function toggleForms(showLogin) {
+            if (showLogin) {
+                loginForm.classList.remove('hidden');
+                registerForm.classList.add('hidden');
+                showRegisterBtn.parentElement.classList.remove('hidden');
+                showLoginText.classList.add('hidden');
+            } else {
+                loginForm.classList.add('hidden');
+                registerForm.classList.remove('hidden');
+                showRegisterBtn.parentElement.classList.add('hidden');
+                showLoginText.classList.remove('hidden');
+            }
+            messageBox.classList.add('hidden'); // Clear messages on form switch
+        }
+
+        showRegisterBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            toggleForms(false);
+        });
+
+        showLoginBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            toggleForms(true);
+        });
+
+        // Handle Login
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = e.target.username.value;
+            const password = e.target.password.value;
+
+            const formData = new URLSearchParams();
+            formData.append('username', username);
+            formData.append('password', password);
+
+            try {
+                const response = await fetch('/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: formData.toString(),
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    localStorage.setItem('access_token', data.access_token);
+                    showMessage('Login successful!', 'success');
+                    checkAuthAndRedirect();
+                } else {
+                    const errorData = await response.json();
+                    showMessage(errorData.detail || 'Login failed.', 'error');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                showMessage('An error occurred during login. Please try again.', 'error');
+            }
+        });
+
+        // Handle Registration
+        registerForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = e.target.username.value;
+            const password = e.target.password.value;
+
+            const formData = new URLSearchParams();
+            formData.append('username', username);
+            formData.append('password', password);
+
+            try {
+                const response = await fetch('/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: formData.toString(),
+                });
+
+                if (response.ok) {
+                    showMessage('Registration successful! Please log in.', 'success');
+                    toggleForms(true); // Switch back to login form
+                } else {
+                    const errorData = await response.json();
+                    showMessage(errorData.detail || 'Registration failed.', 'error');
+                }
+            } catch (error) {
+                console.error('Registration error:', error);
+                showMessage('An error occurred during registration. Please try again.', 'error');
+            }
+        });
+
+        // Check authentication status and redirect
+        async function checkAuthAndRedirect() {
+            const token = localStorage.getItem('access_token');
+            if (token) {
+                try {
+                    const response = await fetch('/users/me', {
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                        },
+                    });
+
+                    if (response.ok) {
+                        const user = await response.json();
+                        welcomeMessage.textContent = `Hello, ${user.username}!`;
+                        authContainer.classList.add('opacity-0', 'scale-95');
+                        setTimeout(() => {
+                            authContainer.classList.add('hidden');
+                            homepageContainer.classList.remove('hidden');
+                            homepageContainer.classList.remove('opacity-0', 'scale-95');
+                            homepageContainer.classList.add('opacity-100', 'scale-100');
+                        }, 300); // Match CSS transition duration
+                    } else {
+                        // Token invalid or expired, clear it
+                        localStorage.removeItem('access_token');
+                        authContainer.classList.remove('hidden', 'opacity-0', 'scale-95');
+                        authContainer.classList.add('opacity-100', 'scale-100');
+                        homepageContainer.classList.add('hidden', 'opacity-0', 'scale-95');
+                        showMessage('Session expired or invalid. Please log in again.', 'error');
+                    }
+                } catch (error) {
+                    console.error('Auth check error:', error);
+                    localStorage.removeItem('access_token');
+                    authContainer.classList.remove('hidden', 'opacity-0', 'scale-95');
+                    authContainer.classList.add('opacity-100', 'scale-100');
+                    homepageContainer.classList.add('hidden', 'opacity-0', 'scale-95');
+                    showMessage('Could not connect to server. Please try again.', 'error');
+                }
+            } else {
+                // No token, show login
+                authContainer.classList.remove('hidden', 'opacity-0', 'scale-95');
+                authContainer.classList.add('opacity-100', 'scale-100');
+                homepageContainer.classList.add('hidden', 'opacity-0', 'scale-95');
+            }
+        }
+
+        // Handle Logout
+        logoutButton.addEventListener('click', () => {
+            localStorage.removeItem('access_token');
+            showMessage('Logged out successfully.', 'info');
+            homepageContainer.classList.add('opacity-0', 'scale-95');
+            setTimeout(() => {
+                homepageContainer.classList.add('hidden');
+                authContainer.classList.remove('hidden');
+                authContainer.classList.remove('opacity-0', 'scale-95');
+                authContainer.classList.add('opacity-100', 'scale-100');
+                contentDisplay.textContent = 'Select an option to see details.'; // Reset content
+            }, 300);
+        });
+
+        // Fetch and display content for homepage options
+        async function fetchContent(endpoint) {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                showMessage('You are not logged in.', 'error');
+                checkAuthAndRedirect(); // Redirect to login if no token
+                return;
+            }
+
+            contentDisplay.textContent = 'Loading...';
+            contentDisplay.classList.add('animate-pulse');
+
+            try {
+                const response = await fetch(endpoint, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                    },
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    contentDisplay.textContent = data.message;
+                    contentDisplay.classList.remove('animate-pulse');
+                } else {
+                    const errorData = await response.json();
+                    contentDisplay.textContent = errorData.detail || 'Failed to load content.';
+                    contentDisplay.classList.remove('animate-pulse');
+                    if (response.status === 401) { // Unauthorized
+                        localStorage.removeItem('access_token');
+                        showMessage('Session expired. Please log in again.', 'error');
+                        checkAuthAndRedirect();
+                    }
+                }
+            } catch (error) {
+                console.error('Fetch content error:', error);
+                contentDisplay.textContent = 'Error loading content. Please try again.';
+                contentDisplay.classList.remove('animate-pulse');
+            }
+        }
+
+        rideOption.addEventListener('click', () => fetchContent('/api/data/ride'));
+        scheduleOption.addEventListener('click', () => fetchContent('/api/data/schedule'));
+        historyOption.addEventListener('click', () => fetchContent('/api/data/history'));
+
+        // Initial check on page load
+        document.addEventListener('DOMContentLoaded', checkAuthAndRedirect);
+
+        // Optional: Dark mode toggle (basic implementation)
+        const toggleDarkMode = () => {
+            document.documentElement.classList.toggle('dark');
+            localStorage.setItem('theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+        };
+
+        // Apply theme on load
+        if (localStorage.getItem('theme') === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+        }
+
+        // You can add a button for dark mode toggle if desired
+        // For example: <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
+    </script>
+</body>
+</html>
