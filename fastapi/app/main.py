@@ -6,9 +6,11 @@ from app.routes import home, ride, schedule, history
 from app.auth.router import router as auth_router
 from app.config import settings
 from sqlalchemy.orm import Session
-from app.database.crud import get_user_by_email, create_user  # Import CRUD directly
+from app.database.crud import get_user_by_email, create_user
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="RideShare", debug=settings.DEBUG)
+
+app = FastAPI(title="ViSta", debug=settings.DEBUG)
 
 # Setup database
 Base.metadata.create_all(bind=engine)
@@ -33,18 +35,20 @@ app.include_router(schedule.router)
 app.include_router(history.router)
 
 
-@app.on_event("startup")
-async def startup():
-    # Create initial admin user if not exists
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     db = SessionLocal()
-    if not get_user_by_email(db, "admin@example.com"):
-        create_user(
-            db,
-            email="admin@example.com",
-            password="securepassword",
-            full_name="Admin User"
-        )
-    db.close()
+    try:
+        if not get_user_by_email(db, "admin@example.com"):
+            create_user(
+                db,
+                email="admin@example.com",
+                password="securepassword",
+                full_name="Admin User"
+            )
+        yield
+    finally:
+        db.close()
 
 
 @app.get("/health")

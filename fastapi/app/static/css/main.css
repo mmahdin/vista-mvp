@@ -14,7 +14,6 @@ body {
     background-color: #f5f7fb;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     color: #333;
-    padding-top: 20px;
 }
 
 .dashboard {
@@ -92,14 +91,14 @@ body {
     padding: 2.5rem;
     width: 100%;
     max-width: 500px;
-    transform: translateY(0);
-    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    /* transform: translateY(0);
+    transition: transform 0.3s ease, box-shadow 0.3s ease; */
 }
 
-.auth-card:hover {
+/* .auth-card:hover {
     transform: translateY(-5px);
     box-shadow: 0 20px 40px rgba(0,0,0,0.15);
-}
+} */
 
 .separator {
     display: flex;

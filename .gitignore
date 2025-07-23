@@ -34,3 +34,9 @@ Thumbs.db
 
 # Static files collected with collectstatic (optional)
 staticfiles/
+
+
+
+# fastapi
+fastapi/rideshare.db
+rideshare.db
