@@ -42,10 +42,8 @@ function initMap() {
     }).setView(currentLocation, 16);
     
     // Add modern tile layer
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
     
     // Add custom zoom control
@@ -53,19 +51,44 @@ function initMap() {
         position: 'bottomright'
     }).addTo(map);
     
-    // Add location control
-    locateBtn.addEventListener('click', () => {
-        map.locate({setView: true, maxZoom: 16});
-    });
-    
-    // Handle location found
-    map.on('locationfound', function(e) {
-        currentLocation = [e.latlng.lat, e.latlng.lng];
-        if (!originMarker) {
-            originMarker = L.marker(e.latlng, {icon: greenIcon}).addTo(map)
-                .bindPopup('Your location').openPopup();
-            originInput.value = "Your current location";
-            updateRideDetails();
+    // Fixed location button functionality
+    locateBtn.addEventListener('click', function() {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const userLocation = [
+                        position.coords.latitude,
+                        position.coords.longitude
+                    ];
+                    
+                    // Set map view to user's location
+                    map.setView(userLocation, 15);
+                    
+                    // Remove existing origin marker if any
+                    if (originMarker) {
+                        map.removeLayer(originMarker);
+                    }
+                    
+                    // Add new marker at user's location
+                    originMarker = L.marker(userLocation, {icon: greenIcon}).addTo(map)
+                        .bindPopup('Your location').openPopup();
+                    
+                    originInput.value = "Your current location";
+                    
+                    // Update ride details if destination exists
+                    if (destinationMarker) {
+                        drawRoute(originMarker.getLatLng(), destinationMarker.getLatLng());
+                        updateRideDetails();
+                    }
+                    
+                    showNotification('Location found!', true);
+                },
+                function(error) {
+                    showNotification('Unable to get your location: ' + error.message, false);
+                }
+            );
+        } else {
+            showNotification('Geolocation is not supported by your browser', false);
         }
     });
     
@@ -86,12 +109,10 @@ function initMap() {
     // Set up map click events
     map.on('click', function(e) {
         if (!originMarker) {
-            originMarker = L.marker(e.latlng, {icon: greenIcon}).addTo(map)
-                .bindPopup('Pickup Location').openPopup();
+            originMarker = L.marker(e.latlng, {icon: greenIcon}).addTo(map);
             originInput.value = `Selected location`;
         } else if (!destinationMarker) {
-            destinationMarker = L.marker(e.latlng, {icon: redIcon}).addTo(map)
-                .bindPopup('Destination').openPopup();
+            destinationMarker = L.marker(e.latlng, {icon: redIcon}).addTo(map);
             destinationInput.value = `Selected location`;
             
             // Draw route
@@ -150,13 +171,14 @@ function updateRideDetails() {
 
 // Show notification
 function showNotification(message, isSuccess = true) {
-    notification.querySelector('.notification-message').textContent = message;
-    notification.className = isSuccess ? 
-        'notification success show' : 'notification error show';
+    // Reset notification classes
+    notification.className = 'notification';
     
-    // Change icon based on success/error
-    const icon = notification.querySelector('i');
-    icon.className = isSuccess ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
+    // Add appropriate classes
+    notification.classList.add(isSuccess ? 'success' : 'error', 'show');
+    
+    // Update content
+    notification.querySelector('.notification-message').textContent = message;
     
     // Hide after 3 seconds
     setTimeout(() => {
