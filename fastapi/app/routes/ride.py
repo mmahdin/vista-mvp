@@ -11,6 +11,7 @@ async def ride_page(
     request: Request,
     user=Depends(protected_route)
 ):
+    print(user)
     return templates.TemplateResponse("ride.html", {
         "request": request,
         "user": user
