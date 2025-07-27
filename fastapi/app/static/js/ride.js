@@ -15,6 +15,10 @@ const clearBtn = document.getElementById('clear-btn');
 // Map variables
 let map, originMarker, destinationMarker, routeLine;
 let currentLocation = [35.972447, 50.732428]; // Default to London
+let currentSuggestionsRequest = null;
+let debounceTimer;
+
+const SUGGESTIONS_DEBOUNCE_TIME = 300; // ms
 
 // Custom icons
 const greenIcon = L.icon({
@@ -32,6 +36,141 @@ const redIcon = L.icon({
     iconAnchor: [12, 41],
     shadowSize: [41, 41]
 });
+
+// Reverse geocode coordinates to address
+function reverseGeocode(coords, callback) {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords[0]}&lon=${coords[1]}`;
+    
+    fetch(url)
+        .then(response => response.json())
+        .then(data => {
+            if (data.display_name) {
+                callback(data.display_name);
+            } else {
+                callback(null);
+            }
+        })
+        .catch(error => {
+            console.error('Reverse geocode error:', error);
+            callback(null);
+        });
+}
+
+// Fetch location suggestions from Nominatim API
+function fetchLocationSuggestions(query, type) {
+    if (!query || query.length < 3) {
+        // Clear suggestions if query is too short
+        const container = type === 'origin' ? originSuggestions : destinationSuggestions;
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+    }
+    
+    // Cancel any pending request
+    if (currentSuggestionsRequest) {
+        currentSuggestionsRequest.abort();
+    }
+    
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
+    
+    const container = type === 'origin' ? originSuggestions : destinationSuggestions;
+    container.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Searching locations...</div>';
+    container.style.display = 'block';
+    
+    // Create new AbortController for this request
+    const controller = new AbortController();
+    const signal = controller.signal;
+    currentSuggestionsRequest = controller;
+    
+    fetch(url, { signal })
+        .then(response => response.json())
+        .then(data => {
+            container.innerHTML = '';
+            
+            if (data.length === 0) {
+                const noResults = document.createElement('div');
+                noResults.className = 'suggestion-item';
+                noResults.textContent = 'No results found';
+                container.appendChild(noResults);
+                return;
+            }
+            
+            data.forEach(item => {
+                const suggestionItem = document.createElement('div');
+                suggestionItem.className = 'suggestion-item';
+                
+                // Determine icon based on location type
+                let iconClass = 'fa-map-marker-alt';
+                if (item.type === 'restaurant' || item.type === 'cafe') {
+                    iconClass = 'fa-utensils';
+                } else if (item.type === 'hotel' || item.class === 'tourism') {
+                    iconClass = 'fa-hotel';
+                } else if (item.type === 'station' || item.class === 'railway') {
+                    iconClass = 'fa-train';
+                } else if (item.type === 'airport') {
+                    iconClass = 'fa-plane';
+                } else if (item.class === 'shop') {
+                    iconClass = 'fa-shopping-cart';
+                }
+                
+                suggestionItem.innerHTML = `
+                    <div class="suggestion-icon">
+                        <i class="fas ${iconClass}"></i>
+                    </div>
+                    <div class="suggestion-text">
+                        <div class="suggestion-name">${item.display_name.split(',')[0]}</div>
+                        <div class="suggestion-address">${item.display_name.split(',').slice(1, 3).join(',')}</div>
+                    </div>
+                `;
+                
+                suggestionItem.addEventListener('click', () => {
+                    const input = type === 'origin' ? originInput : destinationInput;
+                    input.value = item.display_name;
+                    container.style.display = 'none';
+                    
+                    // Create a marker at this location
+                    const lat = parseFloat(item.lat);
+                    const lng = parseFloat(item.lon);
+                    const latLng = [lat, lng];
+                    
+                    // Remove existing marker
+                    if (type === 'origin') {
+                        if (originMarker) map.removeLayer(originMarker);
+                        originMarker = L.marker(latLng, {icon: greenIcon}).addTo(map)
+                            .bindPopup('Pickup Location').openPopup();
+                        
+                        // Pan to the location
+                        map.setView(latLng, 15);
+                    } else {
+                        if (destinationMarker) map.removeLayer(destinationMarker);
+                        destinationMarker = L.marker(latLng, {icon: redIcon}).addTo(map)
+                            .bindPopup('Destination').openPopup();
+                    }
+                    
+                    // If both markers exist, draw the route
+                    if (originMarker && destinationMarker) {
+                        drawRoute(originMarker.getLatLng(), destinationMarker.getLatLng());
+                        updateRideDetails();
+                    } else if (type === 'origin') {
+                        map.setView(latLng, 15);
+                    }
+                });
+                
+                container.appendChild(suggestionItem);
+            });
+        })
+        .catch(error => {
+            if (error.name === 'AbortError') {
+                console.log('Request aborted');
+            } else {
+                console.error('Error fetching suggestions:', error);
+                container.innerHTML = '<div class="suggestion-item">Error loading suggestions</div>';
+            }
+        })
+        .finally(() => {
+            currentSuggestionsRequest = null;
+        });
+}
 
 // Initialize the map
 function initMap() {
@@ -106,14 +245,22 @@ function initMap() {
         destinationSuggestions.style.display = 'none';
     });
     
-    // Set up map click events
+    // Set up map click events - modified to use reverse geocoding
     map.on('click', function(e) {
         if (!originMarker) {
             originMarker = L.marker(e.latlng, {icon: greenIcon}).addTo(map);
-            originInput.value = `Selected location`;
+            
+            // Reverse geocode to get address
+            reverseGeocode([e.latlng.lat, e.latlng.lng], function(address) {
+                originInput.value = address || "Selected location";
+            });
         } else if (!destinationMarker) {
             destinationMarker = L.marker(e.latlng, {icon: redIcon}).addTo(map);
-            destinationInput.value = `Selected location`;
+            
+            // Reverse geocode to get address
+            reverseGeocode([e.latlng.lat, e.latlng.lng], function(address) {
+                destinationInput.value = address || "Selected location";
+            });
             
             // Draw route
             drawRoute(originMarker.getLatLng(), destinationMarker.getLatLng());
@@ -190,13 +337,42 @@ function showNotification(message, isSuccess = true) {
 document.addEventListener('DOMContentLoaded', function() {
     initMap();
     
-    // Event listeners
-    originInput.addEventListener('focus', function() {
-        showLocationSuggestions('origin');
+    // Replace the focus event listeners with input handlers
+    originInput.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            fetchLocationSuggestions(originInput.value, 'origin');
+        }, SUGGESTIONS_DEBOUNCE_TIME);
     });
     
-    destinationInput.addEventListener('focus', function() {
-        showLocationSuggestions('destination');
+    destinationInput.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            fetchLocationSuggestions(destinationInput.value, 'destination');
+        }, SUGGESTIONS_DEBOUNCE_TIME);
+    });
+    
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!originInput.contains(e.target) && !originSuggestions.contains(e.target)) {
+            originSuggestions.style.display = 'none';
+        }
+        if (!destinationInput.contains(e.target) && !destinationSuggestions.contains(e.target)) {
+            destinationSuggestions.style.display = 'none';
+        }
+    });
+    
+    // Press Enter to search
+    originInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && originInput.value.length >= 3) {
+            fetchLocationSuggestions(originInput.value, 'origin');
+        }
+    });
+    
+    destinationInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && destinationInput.value.length >= 3) {
+            fetchLocationSuggestions(destinationInput.value, 'destination');
+        }
     });
     
     requestBtn.addEventListener('click', requestRide);
