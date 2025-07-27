@@ -600,6 +600,7 @@ class GroupManager {
     async requestRide() {
         const markers = this.mapManager.getMarkers();
 
+        // Save location to DB
         try {
             const result = await this.saveLocation(markers.origin, markers.destination);
             console.log('Location saved successfully:', result);
