@@ -357,57 +357,105 @@ class MapManager {
         });
     }
 
-    async addMarker(coords, type) {
+    // Snap to road using OSRM API
+    async snapToRoadOSRM(coords) {
+        const osrmNearestUrl = `http://router.project-osrm.org/nearest/v1/driving/${coords[1]},${coords[0]}.json`;
+        
+        try {
+            const response = await fetch(osrmNearestUrl);
+            if (!response.ok) {
+                throw new Error('OSRM nearest request failed');
+            }
+            
+            const data = await response.json();
+            if (!data.waypoints || data.waypoints.length === 0) {
+                throw new Error('No nearest road found');
+            }
+            
+            const nearestLon = data.waypoints[0].location[0];
+            const nearestLat = data.waypoints[0].location[1];
+            
+            return [nearestLat, nearestLon];
+        } catch (error) {
+            console.error('OSRM snap to road error:', error);
+            throw error;
+        }
+    }
+
+    // Snap to road using Nominatim API
+    async snapToRoadNominatim(coords) {
         const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords[0]}&lon=${coords[1]}&zoom=18&addressdetails=1`;
+        
         try {
             const response = await fetch(nominatimUrl);
             if (!response.ok) {
                 throw new Error('Nominatim reverse geocoding request failed');
             }
+            
             const data = await response.json();
             if (!data || !data.address) {
                 throw new Error('No address found for the given coordinates');
             }
+            
             const nearestLat = parseFloat(data.lat);
             const nearestLon = parseFloat(data.lon);
-            const nearestLatLng = L.latLng(nearestLat, nearestLon);
-
-            if (type === 'origin') {
-                if (this.originMarker) {
-                    this.map.removeLayer(this.originMarker);
-                }
-                this.originMarker = L.marker(nearestLatLng, { icon: ICONS.green }).addTo(this.map);
-                this.map.setView(nearestLatLng, 15);
-            } else {
-                if (this.destinationMarker) {
-                    this.map.removeLayer(this.destinationMarker);
-                }
-                this.destinationMarker = L.marker(nearestLatLng, { icon: ICONS.red }).addTo(this.map);
-            }
-
-            if (this.originMarker && this.destinationMarker) {
-                this.drawRoute();
-                this.rideDetailsManager.update();
-            }
+            
+            return [nearestLat, nearestLon];
         } catch (error) {
-            console.error('Error snapping to road:', error);
-            const latLng = L.latLng(coords[0], coords[1]);
-            if (type === 'origin') {
-                if (this.originMarker) {
-                    this.map.removeLayer(this.originMarker);
+            console.error('Nominatim snap to road error:', error);
+            throw error;
+        }
+    }
+
+    // Main addMarker function with optional snap-to-road
+    async addMarker(coords, type, snapToRoad = true, snapAPI = 'nominatim') {
+        let finalCoords = coords;
+        
+        // Apply snap to road if enabled
+        if (snapToRoad) {
+            try {
+                let snappedCoords;
+                
+                switch (snapAPI.toLowerCase()) {
+                    case 'osrm':
+                        snappedCoords = await this.snapToRoadOSRM(coords);
+                        break;
+                    case 'nominatim':
+                        snappedCoords = await this.snapToRoadNominatim(coords);
+                        break;
+                    default:
+                        console.warn(`Unknown snap API: ${snapAPI}. Using original coordinates.`);
+                        snappedCoords = coords;
                 }
-                this.originMarker = L.marker(latLng, { icon: ICONS.green }).addTo(this.map);
-                this.map.setView(latLng, 15);
-            } else {
-                if (this.destinationMarker) {
-                    this.map.removeLayer(this.destinationMarker);
-                }
-                this.destinationMarker = L.marker(latLng, { icon: ICONS.red }).addTo(this.map);
+                
+                finalCoords = snappedCoords;
+            } catch (error) {
+                console.error('Error snapping to road:', error);
+                console.log('Falling back to original coordinates');
+                // Keep original coordinates as fallback
             }
-            if (this.originMarker && this.destinationMarker) {
-                this.drawRoute();
-                this.rideDetailsManager.update();
+        }
+        
+        const latLng = L.latLng(finalCoords[0], finalCoords[1]);
+        
+        // Handle marker placement based on type
+        if (type === 'origin') {
+            if (this.originMarker) {
+                this.map.removeLayer(this.originMarker);
             }
+            this.originMarker = L.marker(latLng, { icon: ICONS.green }).addTo(this.map);
+            this.map.setView(latLng, 15);
+        } else {
+            if (this.destinationMarker) {
+                this.map.removeLayer(this.destinationMarker);
+            }
+            this.destinationMarker = L.marker(latLng, { icon: ICONS.red }).addTo(this.map);
+        }
+        
+        // Draw route if both markers exist
+        if (this.originMarker && this.destinationMarker) {
+            this.drawRoute();
+            this.rideDetailsManager.update();
         }
     }
 
