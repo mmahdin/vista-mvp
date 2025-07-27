@@ -358,18 +358,18 @@ class MapManager {
     }
 
     async addMarker(coords, type) {
-        const osrmNearestUrl = `http://router.project-osrm.org/nearest/v1/driving/${coords[1]},${coords[0]}.json`;
+        const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords[0]}&lon=${coords[1]}&zoom=18&addressdetails=1`;
         try {
-            const response = await fetch(osrmNearestUrl);
+            const response = await fetch(nominatimUrl);
             if (!response.ok) {
-                throw new Error('OSRM nearest request failed');
+                throw new Error('Nominatim reverse geocoding request failed');
             }
             const data = await response.json();
-            if (!data.waypoints || data.waypoints.length === 0) {
-                throw new Error('No nearest road found');
+            if (!data || !data.address) {
+                throw new Error('No address found for the given coordinates');
             }
-            const nearestLon = data.waypoints[0].location[0];
-            const nearestLat = data.waypoints[0].location[1];
+            const nearestLat = parseFloat(data.lat);
+            const nearestLon = parseFloat(data.lon);
             const nearestLatLng = L.latLng(nearestLat, nearestLon);
 
             if (type === 'origin') {
@@ -385,14 +385,12 @@ class MapManager {
                 this.destinationMarker = L.marker(nearestLatLng, { icon: ICONS.red }).addTo(this.map);
             }
 
-            // Draw route if both markers exist
             if (this.originMarker && this.destinationMarker) {
                 this.drawRoute();
                 this.rideDetailsManager.update();
             }
         } catch (error) {
             console.error('Error snapping to road:', error);
-            // Fallback to original coordinates
             const latLng = L.latLng(coords[0], coords[1]);
             if (type === 'origin') {
                 if (this.originMarker) {
@@ -406,7 +404,6 @@ class MapManager {
                 }
                 this.destinationMarker = L.marker(latLng, { icon: ICONS.red }).addTo(this.map);
             }
-            // Still try to draw route if possible
             if (this.originMarker && this.destinationMarker) {
                 this.drawRoute();
                 this.rideDetailsManager.update();
