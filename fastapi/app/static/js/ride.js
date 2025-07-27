@@ -1,520 +1,717 @@
-// DOM Elements
-const originInput = document.getElementById('origin-input');
-const destinationInput = document.getElementById('destination-input');
-const requestBtn = document.getElementById('request-btn');
-const cancelBtn = document.getElementById('cancel-btn');
-const rideDetails = document.getElementById('ride-details');
-const rideStatus = document.getElementById('ride-status');
-const progressBar = document.getElementById('progress-bar');
-const notification = document.getElementById('notification');
-const originSuggestions = document.getElementById('origin-suggestions');
-const destinationSuggestions = document.getElementById('destination-suggestions');
-const locateBtn = document.getElementById('locate-btn');
-const clearBtn = document.getElementById('clear-btn');
+// ============================================================================
+// CONSTANTS AND CONFIGURATION
+// ============================================================================
+const CONFIG = {
+    DEFAULT_LOCATION: [35.972447, 50.732428],
+    SUGGESTIONS_DEBOUNCE_TIME: 300,
+    DISTANCE_MULTIPLIER: 100,
+    TIME_PER_KM: 3,
+    BASE_FARE: 3,
+    PRICE_PER_KM: 1.5,
+    NOTIFICATION_DURATION: 3000,
+    RIDE_REQUEST_DELAY: 2000,
+    PROGRESS_INTERVAL: 1000,
+    PROGRESS_INCREMENT: 5
+};
 
-// Map variables
-let map, originMarker, destinationMarker, routeLine;
-let currentLocation = [35.972447, 50.732428]; // Default to London
-let currentSuggestionsRequest = null;
-let debounceTimer;
+const ICONS = {
+    green: L.icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        shadowSize: [41, 41]
+    }),
+    red: L.icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        shadowSize: [41, 41]
+    })
+};
 
-const SUGGESTIONS_DEBOUNCE_TIME = 300; // ms
+const LOCATION_ICONS = {
+    restaurant: 'fa-utensils',
+    cafe: 'fa-utensils',
+    hotel: 'fa-hotel',
+    tourism: 'fa-hotel',
+    station: 'fa-train',
+    railway: 'fa-train',
+    airport: 'fa-plane',
+    shop: 'fa-shopping-cart',
+    default: 'fa-map-marker-alt'
+};
 
-// Custom icons
-const greenIcon = L.icon({
-    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
-    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-    iconSize: [25, 41],
-    iconAnchor: [12, 41],
-    shadowSize: [41, 41]
-});
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+class Utils {
+    static escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
 
-const redIcon = L.icon({
-    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
-    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-    iconSize: [25, 41],
-    iconAnchor: [12, 41],
-    shadowSize: [41, 41]
-});
+    static calculateDistance(start, end) {
+        return Math.sqrt(
+            Math.pow(end.lat - start.lat, 2) + 
+            Math.pow(end.lng - start.lng, 2)
+        ) * CONFIG.DISTANCE_MULTIPLIER;
+    }
 
-// Reverse geocode coordinates to address
-function reverseGeocode(coords, callback) {
-    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords[0]}&lon=${coords[1]}`;
-    
-    fetch(url)
-        .then(response => response.json())
-        .then(data => {
-            if (data.display_name) {
-                callback(data.display_name);
-            } else {
-                callback(null);
-            }
-        })
-        .catch(error => {
-            console.error('Reverse geocode error:', error);
-            callback(null);
-        });
+    static calculateTime(distance) {
+        return Math.round(distance * CONFIG.TIME_PER_KM);
+    }
+
+    static calculatePrice(distance) {
+        return (distance * CONFIG.PRICE_PER_KM + CONFIG.BASE_FARE).toFixed(2);
+    }
+
+    static getLocationIcon(item) {
+        if (item.type && LOCATION_ICONS[item.type]) {
+            return LOCATION_ICONS[item.type];
+        }
+        if (item.class && LOCATION_ICONS[item.class]) {
+            return LOCATION_ICONS[item.class];
+        }
+        return LOCATION_ICONS.default;
+    }
+
+    static parseLocationName(displayName) {
+        const nameParts = displayName ? displayName.split(',') : ['Unknown location'];
+        const locationName = nameParts[0] || 'Unknown location';
+        const locationAddress = nameParts.slice(1, 3).join(',').trim() || 'No address available';
+        return { locationName, locationAddress };
+    }
 }
 
-// Fetch location suggestions from Nominatim API
-function fetchLocationSuggestions(query, type) {
-    if (!query || query.length < 3) {
-        // Clear suggestions if query is too short
-        const container = type === 'origin' ? originSuggestions : destinationSuggestions;
-        container.innerHTML = '';
-        container.style.display = 'none';
-        return;
+// ============================================================================
+// GEOCODING SERVICE
+// ============================================================================
+class GeocodingService {
+    constructor() {
+        this.currentRequest = null;
     }
-    
-    // Cancel any pending request
-    if (currentSuggestionsRequest) {
-        currentSuggestionsRequest.abort();
-    }
-    
-    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
-    
-    const container = type === 'origin' ? originSuggestions : destinationSuggestions;
-    container.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Searching locations...</div>';
-    container.style.display = 'block';
-    
-    // Create new AbortController for this request
-    const controller = new AbortController();
-    const signal = controller.signal;
-    currentSuggestionsRequest = controller;
 
-    console.log('Fetching suggestions for:', query);
-    
-    fetch(url, { signal })
-        .then(response => {
+    async reverseGeocode(coords) {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords[0]}&lon=${coords[1]}`;
+        
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+            return data.display_name || null;
+        } catch (error) {
+            console.error('Reverse geocode error:', error);
+            return null;
+        }
+    }
+
+    async fetchLocationSuggestions(query) {
+        if (!query || query.length < 3) {
+            return [];
+        }
+
+        // Cancel any pending request
+        if (this.currentRequest) {
+            this.currentRequest.abort();
+        }
+
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
+        
+        // Create new AbortController for this request
+        const controller = new AbortController();
+        this.currentRequest = controller;
+
+        try {
+            const response = await fetch(url, { signal: controller.signal });
+            
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-            return response.json();
-        })
-        .then(data => {
-            // Clear container first
-            container.innerHTML = '';
             
-            if (!data || data.length === 0) {
-                const noResults = document.createElement('div');
-                noResults.className = 'suggestion-item no-results';
-                noResults.textContent = 'No results found';
-                container.appendChild(noResults);
-                return;
-            }
-            
-            // Create document fragment for better performance
-            const fragment = document.createDocumentFragment();
-            
-            data.forEach((item, index) => {
-                const suggestionItem = document.createElement('div');
-                suggestionItem.className = 'suggestion-item';
-                suggestionItem.setAttribute('data-index', index);
-                suggestionItem.setAttribute('tabindex', '0'); // Make it focusable
-                
-                // Determine icon based on location type
-                let iconClass = 'fa-map-marker-alt';
-                if (item.type === 'restaurant' || item.type === 'cafe') {
-                    iconClass = 'fa-utensils';
-                } else if (item.type === 'hotel' || item.class === 'tourism') {
-                    iconClass = 'fa-hotel';
-                } else if (item.type === 'station' || item.class === 'railway') {
-                    iconClass = 'fa-train';
-                } else if (item.type === 'airport') {
-                    iconClass = 'fa-plane';
-                } else if (item.class === 'shop') {
-                    iconClass = 'fa-shopping-cart';
-                }
-                
-                // Split display name safely
-                const nameParts = item.display_name ? item.display_name.split(',') : ['Unknown location'];
-                const locationName = nameParts[0] || 'Unknown location';
-                const locationAddress = nameParts.slice(1, 3).join(',').trim() || 'No address available';
-                
-                suggestionItem.innerHTML = `
-                    <div class="suggestion-icon">
-                        <i class="fas ${iconClass}"></i>
-                    </div>
-                    <div class="suggestion-text">
-                        <div class="suggestion-name">${escapeHtml(locationName)}</div>
-                        <div class="suggestion-address">${escapeHtml(locationAddress)}</div>
-                    </div>
-                `;
-
-                // Handle click events with proper event handling
-                const clickHandler = function(event) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    
-                    console.log('Suggestion clicked:', item);
-                    
-                    try {
-                        const input = type === 'origin' ? originInput : destinationInput;
-                        if (!input) {
-                            console.error('Input element not found for type:', type);
-                            return;
-                        }
-                        
-                        input.value = item.display_name || '';
-                        container.style.display = 'none';
-                        
-                        // Validate coordinates
-                        const lat = parseFloat(item.lat);
-                        const lng = parseFloat(item.lon);
-                        
-                        if (isNaN(lat) || isNaN(lng)) {
-                            console.error('Invalid coordinates:', item.lat, item.lon);
-                            return;
-                        }
-                        
-                        const latLng = [lat, lng];
-                        
-                        // Handle markers based on type
-                        if (type === 'origin') {
-                            if (typeof originMarker !== 'undefined' && originMarker && map) {
-                                map.removeLayer(originMarker);
-                            }
-                            if (typeof greenIcon !== 'undefined' && map) {
-                                originMarker = L.marker(latLng, {icon: greenIcon}).addTo(map);
-                                map.setView(latLng, 15);
-                            }
-                        } else {
-                            if (typeof destinationMarker !== 'undefined' && destinationMarker && map) {
-                                map.removeLayer(destinationMarker);
-                            }
-                            if (typeof redIcon !== 'undefined' && map) {
-                                destinationMarker = L.marker(latLng, {icon: redIcon}).addTo(map);
-                            }
-                        }
-                        
-                        // Draw route if both markers exist
-                        if (typeof originMarker !== 'undefined' && typeof destinationMarker !== 'undefined' && 
-                            originMarker && destinationMarker) {
-                            if (typeof drawRoute === 'function') {
-                                drawRoute(originMarker.getLatLng(), destinationMarker.getLatLng());
-                            }
-                            if (typeof updateRideDetails === 'function') {
-                                updateRideDetails();
-                            }
-                        } else if (type === 'origin' && map) {
-                            map.setView(latLng, 15);
-                        }
-                        
-                    } catch (error) {
-                        console.error('Error handling suggestion click:', error);
-                    }
-                };
-                
-                // Add both click and keyboard event listeners
-                suggestionItem.addEventListener('click', clickHandler);
-                suggestionItem.addEventListener('keydown', function(event) {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                        clickHandler(event);
-                    }
-                });
-                
-                // Add hover effects
-                suggestionItem.addEventListener('mouseenter', function() {
-                    this.style.backgroundColor = '#f0f0f0';
-                });
-                
-                suggestionItem.addEventListener('mouseleave', function() {
-                    this.style.backgroundColor = '';
-                });
-                
-                fragment.appendChild(suggestionItem);
-            });
-            
-            // Append all items at once
-            container.appendChild(fragment);
-            
-        })
-        .catch(error => {
-            console.error('Fetch error details:', error);
-            
+            const data = await response.json();
+            return data || [];
+        } catch (error) {
             if (error.name === 'AbortError') {
                 console.log('Request aborted');
+                return [];
+            }
+            console.error('Fetch error:', error);
+            throw error;
+        } finally {
+            this.currentRequest = null;
+        }
+    }
+}
+
+// ============================================================================
+// NOTIFICATION SYSTEM
+// ============================================================================
+class NotificationManager {
+    constructor(notificationElement) {
+        this.notification = notificationElement;
+    }
+
+    show(message, isSuccess = true) {
+        // Reset notification classes
+        this.notification.className = 'notification';
+        
+        // Add appropriate classes
+        this.notification.classList.add(isSuccess ? 'success' : 'error', 'show');
+        
+        // Update content
+        this.notification.querySelector('.notification-message').textContent = message;
+        
+        // Hide after configured duration
+        setTimeout(() => {
+            this.notification.classList.remove('show');
+        }, CONFIG.NOTIFICATION_DURATION);
+    }
+}
+
+// ============================================================================
+// SUGGESTIONS MANAGER
+// ============================================================================
+class SuggestionsManager {
+    constructor(geocodingService, mapManager) {
+        this.geocodingService = geocodingService;
+        this.mapManager = mapManager;
+        this.debounceTimer = null;
+    }
+
+    async displaySuggestions(query, type, container) {
+        if (!query || query.length < 3) {
+            container.innerHTML = '';
+            container.style.display = 'none';
+            return;
+        }
+
+        container.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Searching locations...</div>';
+        container.style.display = 'block';
+
+        try {
+            const suggestions = await this.geocodingService.fetchLocationSuggestions(query);
+            this.renderSuggestions(suggestions, type, container);
+        } catch (error) {
+            container.innerHTML = '<div class="suggestion-item error">Error loading suggestions. Please try again.</div>';
+        }
+    }
+
+    renderSuggestions(suggestions, type, container) {
+        container.innerHTML = '';
+
+        if (!suggestions || suggestions.length === 0) {
+            const noResults = document.createElement('div');
+            noResults.className = 'suggestion-item no-results';
+            noResults.textContent = 'No results found';
+            container.appendChild(noResults);
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+
+        suggestions.forEach((item, index) => {
+            const suggestionItem = this.createSuggestionItem(item, index, type);
+            fragment.appendChild(suggestionItem);
+        });
+
+        container.appendChild(fragment);
+    }
+
+    createSuggestionItem(item, index, type) {
+        const suggestionItem = document.createElement('div');
+        suggestionItem.className = 'suggestion-item';
+        suggestionItem.setAttribute('data-index', index);
+        suggestionItem.setAttribute('tabindex', '0');
+
+        const iconClass = Utils.getLocationIcon(item);
+        const { locationName, locationAddress } = Utils.parseLocationName(item.display_name);
+
+        suggestionItem.innerHTML = `
+            <div class="suggestion-icon">
+                <i class="fas ${iconClass}"></i>
+            </div>
+            <div class="suggestion-text">
+                <div class="suggestion-name">${Utils.escapeHtml(locationName)}</div>
+                <div class="suggestion-address">${Utils.escapeHtml(locationAddress)}</div>
+            </div>
+        `;
+
+        this.attachSuggestionEventListeners(suggestionItem, item, type);
+        return suggestionItem;
+    }
+
+    attachSuggestionEventListeners(suggestionItem, item, type) {
+        const clickHandler = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.handleSuggestionClick(item, type);
+        };
+
+        suggestionItem.addEventListener('click', clickHandler);
+        suggestionItem.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                clickHandler(event);
+            }
+        });
+
+        // Add hover effects
+        suggestionItem.addEventListener('mouseenter', function() {
+            this.style.backgroundColor = '#f0f0f0';
+        });
+
+        suggestionItem.addEventListener('mouseleave', function() {
+            this.style.backgroundColor = '';
+        });
+    }
+
+    handleSuggestionClick(item, type) {
+        try {
+            const input = type === 'origin' ? 
+                document.getElementById('origin-input') : 
+                document.getElementById('destination-input');
+            
+            const container = type === 'origin' ? 
+                document.getElementById('origin-suggestions') : 
+                document.getElementById('destination-suggestions');
+
+            if (!input) {
+                console.error('Input element not found for type:', type);
                 return;
             }
-            
-            container.innerHTML = '<div class="suggestion-item error">Error loading suggestions. Please try again.</div>';
-        })
-        .finally(() => {
-            currentSuggestionsRequest = null;
+
+            input.value = item.display_name || '';
+            container.style.display = 'none';
+
+            const lat = parseFloat(item.lat);
+            const lng = parseFloat(item.lon);
+
+            if (isNaN(lat) || isNaN(lng)) {
+                console.error('Invalid coordinates:', item.lat, item.lon);
+                return;
+            }
+
+            this.mapManager.addMarker([lat, lng], type);
+        } catch (error) {
+            console.error('Error handling suggestion click:', error);
+        }
+    }
+
+    debouncedFetch(query, type, container) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = setTimeout(() => {
+            this.displaySuggestions(query, type, container);
+        }, CONFIG.SUGGESTIONS_DEBOUNCE_TIME);
+    }
+}
+
+// ============================================================================
+// MAP MANAGER
+// ============================================================================
+class MapManager {
+    constructor(mapElementId, rideDetailsManager, geocodingService) {
+        this.mapElementId = mapElementId;
+        this.rideDetailsManager = rideDetailsManager;
+        this.geocodingService = geocodingService;
+        this.map = null;
+        this.originMarker = null;
+        this.destinationMarker = null;
+        this.routeLine = null;
+        this.currentLocation = CONFIG.DEFAULT_LOCATION;
+    }
+
+    initialize() {
+        this.map = L.map(this.mapElementId, {
+            zoomControl: false,
+            attributionControl: false
+        }).setView(this.currentLocation, 16);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(this.map);
+
+        L.control.zoom({
+            position: 'bottomright'
+        }).addTo(this.map);
+
+        this.setupMapEventListeners();
+    }
+
+    setupMapEventListeners() {
+        this.map.on('click', async (e) => {
+            if (!this.originMarker) {
+                this.addMarker([e.latlng.lat, e.latlng.lng], 'origin');
+                
+                const address = await this.geocodingService.reverseGeocode([e.latlng.lat, e.latlng.lng]);
+                document.getElementById('origin-input').value = address || "Selected location";
+            } else if (!this.destinationMarker) {
+                this.addMarker([e.latlng.lat, e.latlng.lng], 'destination');
+                
+                const address = await this.geocodingService.reverseGeocode([e.latlng.lat, e.latlng.lng]);
+                document.getElementById('destination-input').value = address || "Selected location";
+                
+                this.drawRoute();
+                this.rideDetailsManager.update();
+            }
         });
-}
+    }
 
-// Helper function to escape HTML to prevent XSS
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+    async addMarker(coords, type) {
+        const osrmNearestUrl = `http://router.project-osrm.org/nearest/v1/driving/${coords[1]},${coords[0]}.json`;
+        try {
+            const response = await fetch(osrmNearestUrl);
+            if (!response.ok) {
+                throw new Error('OSRM nearest request failed');
+            }
+            const data = await response.json();
+            if (!data.waypoints || data.waypoints.length === 0) {
+                throw new Error('No nearest road found');
+            }
+            const nearestLon = data.waypoints[0].location[0];
+            const nearestLat = data.waypoints[0].location[1];
+            const nearestLatLng = L.latLng(nearestLat, nearestLon);
 
-// Initialize the map
-function initMap() {
-    // Create map with modern style
-    map = L.map('map', {
-        zoomControl: false,
-        attributionControl: false
-    }).setView(currentLocation, 16);
-    
-    // Add modern tile layer
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
-    
-    // Add custom zoom control
-    L.control.zoom({
-        position: 'bottomright'
-    }).addTo(map);
-    
-    // Fixed location button functionality
-    locateBtn.addEventListener('click', function() {
+            if (type === 'origin') {
+                if (this.originMarker) {
+                    this.map.removeLayer(this.originMarker);
+                }
+                this.originMarker = L.marker(nearestLatLng, { icon: ICONS.green }).addTo(this.map);
+                this.map.setView(nearestLatLng, 15);
+            } else {
+                if (this.destinationMarker) {
+                    this.map.removeLayer(this.destinationMarker);
+                }
+                this.destinationMarker = L.marker(nearestLatLng, { icon: ICONS.red }).addTo(this.map);
+            }
+
+            // Draw route if both markers exist
+            if (this.originMarker && this.destinationMarker) {
+                this.drawRoute();
+                this.rideDetailsManager.update();
+            }
+        } catch (error) {
+            console.error('Error snapping to road:', error);
+            // Fallback to original coordinates
+            const latLng = L.latLng(coords[0], coords[1]);
+            if (type === 'origin') {
+                if (this.originMarker) {
+                    this.map.removeLayer(this.originMarker);
+                }
+                this.originMarker = L.marker(latLng, { icon: ICONS.green }).addTo(this.map);
+                this.map.setView(latLng, 15);
+            } else {
+                if (this.destinationMarker) {
+                    this.map.removeLayer(this.destinationMarker);
+                }
+                this.destinationMarker = L.marker(latLng, { icon: ICONS.red }).addTo(this.map);
+            }
+            // Still try to draw route if possible
+            if (this.originMarker && this.destinationMarker) {
+                this.drawRoute();
+                this.rideDetailsManager.update();
+            }
+        }
+    }
+
+    drawRoute() {
+        if (!this.originMarker || !this.destinationMarker) return;
+
+        if (this.routeLine) {
+            this.map.removeLayer(this.routeLine);
+        }
+
+        const start = this.originMarker.getLatLng();
+        const end = this.destinationMarker.getLatLng();
+
+        // Simulated route points (in a real app, use a routing service)
+        const routePoints = [
+            start,
+            [start.lat + (end.lat - start.lat) * 0.3, start.lng + (end.lng - start.lng) * 0.3],
+            [start.lat + (end.lat - start.lat) * 0.7, start.lng + (end.lng - start.lng) * 0.7],
+            end
+        ];
+
+        this.routeLine = L.polyline(routePoints, {
+            color: '#4361ee',
+            weight: 5,
+            opacity: 0.8,
+            lineJoin: 'round',
+            dashArray: '10, 10'
+        }).addTo(this.map);
+
+        // Fit map to route bounds
+        this.map.fitBounds([start, end], { padding: [100, 100] });
+    }
+
+    clearMarkers() {
+        if (this.originMarker) {
+            this.map.removeLayer(this.originMarker);
+            this.originMarker = null;
+        }
+        if (this.destinationMarker) {
+            this.map.removeLayer(this.destinationMarker);
+            this.destinationMarker = null;
+        }
+        if (this.routeLine) {
+            this.map.removeLayer(this.routeLine);
+            this.routeLine = null;
+        }
+    }
+
+    getCurrentLocation(callback) {
         if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
-                function(position) {
+                (position) => {
                     const userLocation = [
                         position.coords.latitude,
                         position.coords.longitude
                     ];
                     
-                    // Set map view to user's location
-                    map.setView(userLocation, 15);
+                    this.map.setView(userLocation, 15);
                     
-                    // Remove existing origin marker if any
-                    if (originMarker) {
-                        map.removeLayer(originMarker);
+                    if (this.originMarker) {
+                        this.map.removeLayer(this.originMarker);
                     }
                     
-                    // Add new marker at user's location
-                    originMarker = L.marker(userLocation, {icon: greenIcon}).addTo(map)
-                        .bindPopup('Your location').openPopup();
+                    this.originMarker = L.marker(userLocation, { icon: ICONS.green })
+                        .addTo(this.map)
+                        .bindPopup('Your location')
+                        .openPopup();
                     
-                    originInput.value = "Your current location";
+                    document.getElementById('origin-input').value = "Your current location";
                     
-                    // Update ride details if destination exists
-                    if (destinationMarker) {
-                        drawRoute(originMarker.getLatLng(), destinationMarker.getLatLng());
-                        updateRideDetails();
+                    if (this.destinationMarker) {
+                        this.drawRoute();
+                        this.rideDetailsManager.update();
                     }
                     
-                    showNotification('Location found!', true);
+                    callback(null, 'Location found!');
                 },
-                function(error) {
-                    showNotification('Unable to get your location: ' + error.message, false);
+                (error) => {
+                    callback(error, null);
                 }
             );
         } else {
-            showNotification('Geolocation is not supported by your browser', false);
+            callback(new Error('Geolocation is not supported by your browser'), null);
         }
-    });
-    
-    // Clear markers
-    clearBtn.addEventListener('click', () => {
-        if (originMarker) map.removeLayer(originMarker);
-        if (destinationMarker) map.removeLayer(destinationMarker);
-        if (routeLine) map.removeLayer(routeLine);
-        originMarker = null;
-        destinationMarker = null;
-        originInput.value = "";
-        destinationInput.value = "";
-        rideDetails.style.display = 'none';
-        originSuggestions.style.display = 'none';
-        destinationSuggestions.style.display = 'none';
-    });
-    
-    // Set up map click events - modified to use reverse geocoding
-    map.on('click', function(e) {
-        if (!originMarker) {
-            originMarker = L.marker(e.latlng, {icon: greenIcon}).addTo(map);
-            
-            // Reverse geocode to get address
-            reverseGeocode([e.latlng.lat, e.latlng.lng], function(address) {
-                originInput.value = address || "Selected location";
-            });
-        } else if (!destinationMarker) {
-            destinationMarker = L.marker(e.latlng, {icon: redIcon}).addTo(map);
-            
-            // Reverse geocode to get address
-            reverseGeocode([e.latlng.lat, e.latlng.lng], function(address) {
-                destinationInput.value = address || "Selected location";
-            });
-            
-            // Draw route
-            drawRoute(originMarker.getLatLng(), destinationMarker.getLatLng());
-            updateRideDetails();
-        }
-    });
-}
+    }
 
-// Draw route on map
-function drawRoute(start, end) {
-    if (routeLine) map.removeLayer(routeLine);
-    
-    // Simulated route points (in a real app, use a routing service)
-    const routePoints = [
-        start,
-        [start.lat + (end.lat - start.lat) * 0.3, start.lng + (end.lng - start.lng) * 0.3],
-        [start.lat + (end.lat - start.lat) * 0.7, start.lng + (end.lng - start.lng) * 0.7],
-        end
-    ];
-    
-    routeLine = L.polyline(routePoints, {
-        color: '#4361ee',
-        weight: 5,
-        opacity: 0.8,
-        lineJoin: 'round',
-        dashArray: '10, 10'
-    }).addTo(map);
-    
-    // Fit map to route bounds
-    map.fitBounds([start, end], {padding: [100, 100]});
-}
-
-// Update ride details
-function updateRideDetails() {
-    if (originMarker && destinationMarker) {
-        const start = originMarker.getLatLng();
-        const end = destinationMarker.getLatLng();
-        
-        // Calculate distance (simplified)
-        const distance = Math.sqrt(
-            Math.pow(end.lat - start.lat, 2) + 
-            Math.pow(end.lng - start.lng, 2)
-        ) * 100; // Rough km conversion
-        
-        const time = Math.round(distance * 3); // 3 min per km
-        const price = (distance * 1.5 + 3).toFixed(2); // Base fare + per km
-        
-        document.getElementById('distance-value').textContent = distance.toFixed(1) + ' km';
-        document.getElementById('time-value').textContent = time + ' min';
-        document.getElementById('price-value').textContent = '$' + price;
-        
-        rideDetails.style.display = 'block';
+    getMarkers() {
+        return {
+            origin: this.originMarker,
+            destination: this.destinationMarker
+        };
     }
 }
 
-// Show notification
-function showNotification(message, isSuccess = true) {
-    // Reset notification classes
-    notification.className = 'notification';
-    
-    // Add appropriate classes
-    notification.classList.add(isSuccess ? 'success' : 'error', 'show');
-    
-    // Update content
-    notification.querySelector('.notification-message').textContent = message;
-    
-    // Hide after 3 seconds
-    setTimeout(() => {
-        notification.classList.remove('show');
-    }, 3000);
+// ============================================================================
+// RIDE DETAILS MANAGER
+// ============================================================================
+class RideDetailsManager {
+    constructor(mapManager) {
+        this.mapManager = mapManager;
+        this.rideDetailsElement = document.getElementById('ride-details');
+    }
+
+    update() {
+        const markers = this.mapManager.getMarkers();
+        
+        if (markers.origin && markers.destination) {
+            const start = markers.origin.getLatLng();
+            const end = markers.destination.getLatLng();
+            
+            const distance = Utils.calculateDistance(start, end);
+            const time = Utils.calculateTime(distance);
+            const price = Utils.calculatePrice(distance);
+            
+            document.getElementById('distance-value').textContent = distance.toFixed(1) + ' km';
+            document.getElementById('time-value').textContent = time + ' min';
+            document.getElementById('price-value').textContent = '$' + price;
+            
+            this.rideDetailsElement.style.display = 'block';
+        }
+    }
+
+    hide() {
+        this.rideDetailsElement.style.display = 'none';
+    }
 }
 
-// Initialize the app
-document.addEventListener('DOMContentLoaded', function() {
-    initMap();
-    
-    // Replace the focus event listeners with input handlers
-    originInput.addEventListener('input', function() {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            fetchLocationSuggestions(originInput.value, 'origin');
-        }, SUGGESTIONS_DEBOUNCE_TIME);
-    });
-    
-    destinationInput.addEventListener('input', function() {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            fetchLocationSuggestions(destinationInput.value, 'destination');
-        }, SUGGESTIONS_DEBOUNCE_TIME);
-    });
-    
-    // Hide suggestions when clicking outside
-    document.addEventListener('click', function(e) {
-        if (!originInput.contains(e.target) && !originSuggestions.contains(e.target)) {
-            originSuggestions.style.display = 'none';
-        }
-        if (!destinationInput.contains(e.target) && !destinationSuggestions.contains(e.target)) {
-            destinationSuggestions.style.display = 'none';
-        }
-    });
-    
-    // Press Enter to search
-    originInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter' && originInput.value.length >= 3) {
-            fetchLocationSuggestions(originInput.value, 'origin');
-        }
-    });
-    
-    destinationInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter' && destinationInput.value.length >= 3) {
-            fetchLocationSuggestions(destinationInput.value, 'destination');
-        }
-    });
-    
-    requestBtn.addEventListener('click', requestRide);
-    cancelBtn.addEventListener('click', cancelRide);
-});
-
-
-// Request a ride
-function requestRide() {
-    if (!originMarker || !destinationMarker) {
-        showNotification('Please select both origin and destination locations', false);
-        return;
+// ============================================================================
+// RIDE MANAGER
+// ============================================================================
+class RideManager {
+    constructor(mapManager, notificationManager) {
+        this.mapManager = mapManager;
+        this.notificationManager = notificationManager;
+        this.requestBtn = document.getElementById('request-btn');
+        this.cancelBtn = document.getElementById('cancel-btn');
+        this.rideStatus = document.getElementById('ride-status');
+        this.progressBar = document.getElementById('progress-bar');
+        this.progressInterval = null;
     }
-    
-    // Show loading state
-    requestBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finding a driver...';
-    requestBtn.disabled = true;
-    
-    // Simulate API request to backend
-    setTimeout(() => {
-        // Hide request button and show cancel button
-        requestBtn.style.display = 'none';
-        cancelBtn.style.display = 'flex';
+
+    async requestRide() {
+        const markers = this.mapManager.getMarkers();
         
-        // Show ride status
-        rideStatus.style.display = 'block';
-        
-        // Update progress bar
+        if (!markers.origin || !markers.destination) {
+            this.notificationManager.show('Please select both origin and destination locations', false);
+            return;
+        }
+
+        // Show loading state
+        this.requestBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finding a driver...';
+        this.requestBtn.disabled = true;
+
+        // Simulate API request
+        setTimeout(() => {
+            this.showRideInProgress();
+            this.startProgressAnimation();
+            this.notificationManager.show('Ride requested successfully! Driver assigned.');
+        }, CONFIG.RIDE_REQUEST_DELAY);
+    }
+
+    showRideInProgress() {
+        this.requestBtn.style.display = 'none';
+        this.cancelBtn.style.display = 'flex';
+        this.rideStatus.style.display = 'block';
+    }
+
+    startProgressAnimation() {
         let progress = 0;
-        const interval = setInterval(() => {
-            progress += 5;
-            progressBar.style.width = `${progress}%`;
+        this.progressInterval = setInterval(() => {
+            progress += CONFIG.PROGRESS_INCREMENT;
+            this.progressBar.style.width = `${progress}%`;
             
             if (progress >= 100) {
-                clearInterval(interval);
-                showNotification('Your driver has arrived!');
+                clearInterval(this.progressInterval);
+                this.notificationManager.show('Your driver has arrived!');
             }
-        }, 1000);
+        }, CONFIG.PROGRESS_INTERVAL);
+    }
+
+    cancelRide() {
+        // Clear progress interval
+        if (this.progressInterval) {
+            clearInterval(this.progressInterval);
+            this.progressInterval = null;
+        }
+
+        // Reset UI
+        this.requestBtn.style.display = 'flex';
+        this.requestBtn.innerHTML = '<i class="fas fa-car"></i> Request Ride';
+        this.requestBtn.disabled = false;
+        this.cancelBtn.style.display = 'none';
+        this.rideStatus.style.display = 'none';
+        this.progressBar.style.width = '0%';
         
-        // Show success notification
-        showNotification('Ride requested successfully! Driver assigned.');
-    }, 2000);
+        this.notificationManager.show('Ride cancelled successfully');
+    }
 }
 
-// Cancel ride
-function cancelRide() {
-    // Reset UI
-    requestBtn.style.display = 'flex';
-    requestBtn.innerHTML = '<i class="fas fa-car"></i> Request Ride';
-    requestBtn.disabled = false;
-    cancelBtn.style.display = 'none';
-    rideStatus.style.display = 'none';
-    progressBar.style.width = '0%';
-    
-    showNotification('Ride cancelled successfully');
+// ============================================================================
+// MAIN APPLICATION CLASS
+// ============================================================================
+class RideApp {
+    constructor() {
+        this.geocodingService = new GeocodingService();
+        this.notificationManager = new NotificationManager(document.getElementById('notification'));
+        this.rideDetailsManager = null; // Will be initialized after mapManager
+        this.mapManager = new MapManager('map', null, this.geocodingService);
+        this.suggestionsManager = new SuggestionsManager(this.geocodingService, this.mapManager);
+        this.rideManager = null; // Will be initialized after mapManager
+        
+        // Initialize ride details manager with map manager
+        this.rideDetailsManager = new RideDetailsManager(this.mapManager);
+        this.mapManager.rideDetailsManager = this.rideDetailsManager;
+        
+        // Initialize ride manager
+        this.rideManager = new RideManager(this.mapManager, this.notificationManager);
+        
+        this.initializeEventListeners();
+    }
+
+    initialize() {
+        this.mapManager.initialize();
+    }
+
+    initializeEventListeners() {
+        // Input event listeners
+        const originInput = document.getElementById('origin-input');
+        const destinationInput = document.getElementById('destination-input');
+        const originSuggestions = document.getElementById('origin-suggestions');
+        const destinationSuggestions = document.getElementById('destination-suggestions');
+
+        originInput.addEventListener('input', () => {
+            this.suggestionsManager.debouncedFetch(originInput.value, 'origin', originSuggestions);
+        });
+
+        destinationInput.addEventListener('input', () => {
+            this.suggestionsManager.debouncedFetch(destinationInput.value, 'destination', destinationSuggestions);
+        });
+
+        // Enter key listeners
+        originInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && originInput.value.length >= 3) {
+                this.suggestionsManager.displaySuggestions(originInput.value, 'origin', originSuggestions);
+            }
+        });
+
+        destinationInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && destinationInput.value.length >= 3) {
+                this.suggestionsManager.displaySuggestions(destinationInput.value, 'destination', destinationSuggestions);
+            }
+        });
+
+        // Button event listeners
+        document.getElementById('locate-btn').addEventListener('click', () => {
+            this.mapManager.getCurrentLocation((error, message) => {
+                if (error) {
+                    this.notificationManager.show('Unable to get your location: ' + error.message, false);
+                } else {
+                    this.notificationManager.show(message);
+                }
+            });
+        });
+
+        document.getElementById('clear-btn').addEventListener('click', () => {
+            this.clearAll();
+        });
+
+        document.getElementById('request-btn').addEventListener('click', () => {
+            this.rideManager.requestRide();
+        });
+
+        document.getElementById('cancel-btn').addEventListener('click', () => {
+            this.rideManager.cancelRide();
+        });
+
+        // Click outside to hide suggestions
+        document.addEventListener('click', (e) => {
+            if (!originInput.contains(e.target) && !originSuggestions.contains(e.target)) {
+                originSuggestions.style.display = 'none';
+            }
+            if (!destinationInput.contains(e.target) && !destinationSuggestions.contains(e.target)) {
+                destinationSuggestions.style.display = 'none';
+            }
+        });
+    }
+
+    clearAll() {
+        this.mapManager.clearMarkers();
+        document.getElementById('origin-input').value = "";
+        document.getElementById('destination-input').value = "";
+        document.getElementById('origin-suggestions').style.display = 'none';
+        document.getElementById('destination-suggestions').style.display = 'none';
+        this.rideDetailsManager.hide();
+    }
 }
 
-// Close suggestions when clicking outside
-document.addEventListener('click', function(e) {
-    if (!originInput.contains(e.target) && !originSuggestions.contains(e.target)) {
-        originSuggestions.style.display = 'none';
-    }
-    if (!destinationInput.contains(e.target) && !destinationSuggestions.contains(e.target)) {
-        destinationSuggestions.style.display = 'none';
-    }
+// ============================================================================
+// APPLICATION INITIALIZATION
+// ============================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    const app = new RideApp();
+    app.initialize();
 });
