@@ -351,8 +351,8 @@ class MapManager {
                 const address = await this.geocodingService.reverseGeocode([e.latlng.lat, e.latlng.lng]);
                 document.getElementById('destination-input').value = address || "Selected location";
                 
-                this.drawRoute();
-                this.rideDetailsManager.update();
+                // this.drawRoute();
+                // this.rideDetailsManager.update();
             }
         });
     }
@@ -454,8 +454,8 @@ class MapManager {
         
         // Draw route if both markers exist
         if (this.originMarker && this.destinationMarker) {
-            this.drawRoute();
-            this.rideDetailsManager.update();
+            // this.drawRoute();
+            // this.rideDetailsManager.update();
         }
     }
 
@@ -527,8 +527,8 @@ class MapManager {
                     document.getElementById('origin-input').value = "Your current location";
                     
                     if (this.destinationMarker) {
-                        this.drawRoute();
-                        this.rideDetailsManager.update();
+                        // this.drawRoute();
+                        // this.rideDetailsManager.update();
                     }
                     
                     callback(null, 'Location found!');
@@ -586,11 +586,11 @@ class RideDetailsManager {
 // ============================================================================
 // RIDE MANAGER
 // ============================================================================
-class RideManager {
+class GroupManager {
     constructor(mapManager, notificationManager) {
         this.mapManager = mapManager;
         this.notificationManager = notificationManager;
-        this.requestBtn = document.getElementById('request-btn');
+        this.grouptBtn = document.getElementById('group-btn');
         this.cancelBtn = document.getElementById('cancel-btn');
         this.rideStatus = document.getElementById('ride-status');
         this.progressBar = document.getElementById('progress-bar');
@@ -599,6 +599,13 @@ class RideManager {
 
     async requestRide() {
         const markers = this.mapManager.getMarkers();
+
+        try {
+            const result = await this.saveLocation(markers.origin, markers.destination);
+            console.log('Location saved successfully:', result);
+        } catch (error) {
+            console.error('Failed to save location:', error);
+        }
         
         if (!markers.origin || !markers.destination) {
             this.notificationManager.show('Please select both origin and destination locations', false);
@@ -606,8 +613,8 @@ class RideManager {
         }
 
         // Show loading state
-        this.requestBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finding a driver...';
-        this.requestBtn.disabled = true;
+        this.grouptBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finding a driver...';
+        this.grouptBtn.disabled = true;
 
         // Simulate API request
         setTimeout(() => {
@@ -618,7 +625,7 @@ class RideManager {
     }
 
     showRideInProgress() {
-        this.requestBtn.style.display = 'none';
+        this.grouptBtn.style.display = 'none';
         this.cancelBtn.style.display = 'flex';
         this.rideStatus.style.display = 'block';
     }
@@ -644,14 +651,47 @@ class RideManager {
         }
 
         // Reset UI
-        this.requestBtn.style.display = 'flex';
-        this.requestBtn.innerHTML = '<i class="fas fa-car"></i> Request Ride';
-        this.requestBtn.disabled = false;
+        this.grouptBtn.style.display = 'flex';
+        this.grouptBtn.innerHTML = '<i class="fas fa-car"></i> Request Ride';
+        this.grouptBtn.disabled = false;
         this.cancelBtn.style.display = 'none';
         this.rideStatus.style.display = 'none';
         this.progressBar.style.width = '0%';
         
         this.notificationManager.show('Ride cancelled successfully');
+    }
+
+    async saveLocation(originMarker, destinationMarker) {
+        const start = originMarker.getLatLng();
+        const end = destinationMarker.getLatLng();
+
+        const locationData = {
+            origin_lat: start.lat,
+            origin_lng: start.lng,
+            destination_lat: end.lat,
+            destination_lng: end.lng
+        };
+
+        try {
+            const response = await fetch('/save-location/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(locationData)
+            });
+
+            if (!response.ok) {
+                throw new Error(`Error: ${response.status}`);
+            }
+
+            const result = await response.json();
+            return result;
+
+        } catch (error) {
+            console.error('Error saving location:', error);
+            throw error;
+        }
     }
 }
 
@@ -672,7 +712,7 @@ class RideApp {
         this.mapManager.rideDetailsManager = this.rideDetailsManager;
         
         // Initialize ride manager
-        this.rideManager = new RideManager(this.mapManager, this.notificationManager);
+        this.rideManager = new GroupManager(this.mapManager, this.notificationManager);
         
         this.initializeEventListeners();
     }
@@ -724,7 +764,7 @@ class RideApp {
             this.clearAll();
         });
 
-        document.getElementById('request-btn').addEventListener('click', () => {
+        document.getElementById('group-btn').addEventListener('click', () => {
             this.rideManager.requestRide();
         });
 
