@@ -81,23 +81,36 @@ function fetchLocationSuggestions(query, type) {
     const controller = new AbortController();
     const signal = controller.signal;
     currentSuggestionsRequest = controller;
+
+    console.log('Fetching suggestions for:', query);
     
     fetch(url, { signal })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
+            // Clear container first
             container.innerHTML = '';
             
-            if (data.length === 0) {
+            if (!data || data.length === 0) {
                 const noResults = document.createElement('div');
-                noResults.className = 'suggestion-item';
+                noResults.className = 'suggestion-item no-results';
                 noResults.textContent = 'No results found';
                 container.appendChild(noResults);
                 return;
             }
             
-            data.forEach(item => {
+            // Create document fragment for better performance
+            const fragment = document.createDocumentFragment();
+            
+            data.forEach((item, index) => {
                 const suggestionItem = document.createElement('div');
                 suggestionItem.className = 'suggestion-item';
+                suggestionItem.setAttribute('data-index', index);
+                suggestionItem.setAttribute('tabindex', '0'); // Make it focusable
                 
                 // Determine icon based on location type
                 let iconClass = 'fa-map-marker-alt';
@@ -113,63 +126,129 @@ function fetchLocationSuggestions(query, type) {
                     iconClass = 'fa-shopping-cart';
                 }
                 
+                // Split display name safely
+                const nameParts = item.display_name ? item.display_name.split(',') : ['Unknown location'];
+                const locationName = nameParts[0] || 'Unknown location';
+                const locationAddress = nameParts.slice(1, 3).join(',').trim() || 'No address available';
+                
                 suggestionItem.innerHTML = `
                     <div class="suggestion-icon">
                         <i class="fas ${iconClass}"></i>
                     </div>
                     <div class="suggestion-text">
-                        <div class="suggestion-name">${item.display_name.split(',')[0]}</div>
-                        <div class="suggestion-address">${item.display_name.split(',').slice(1, 3).join(',')}</div>
+                        <div class="suggestion-name">${escapeHtml(locationName)}</div>
+                        <div class="suggestion-address">${escapeHtml(locationAddress)}</div>
                     </div>
                 `;
-                
-                suggestionItem.addEventListener('click', () => {
-                    const input = type === 'origin' ? originInput : destinationInput;
-                    input.value = item.display_name;
-                    container.style.display = 'none';
+
+                // Handle click events with proper event handling
+                const clickHandler = function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
                     
-                    // Create a marker at this location
-                    const lat = parseFloat(item.lat);
-                    const lng = parseFloat(item.lon);
-                    const latLng = [lat, lng];
+                    console.log('Suggestion clicked:', item);
                     
-                    // Remove existing marker
-                    if (type === 'origin') {
-                        if (originMarker) map.removeLayer(originMarker);
-                        originMarker = L.marker(latLng, {icon: greenIcon}).addTo(map)
-                            .bindPopup('Pickup Location').openPopup();
+                    try {
+                        const input = type === 'origin' ? originInput : destinationInput;
+                        if (!input) {
+                            console.error('Input element not found for type:', type);
+                            return;
+                        }
                         
-                        // Pan to the location
-                        map.setView(latLng, 15);
-                    } else {
-                        if (destinationMarker) map.removeLayer(destinationMarker);
-                        destinationMarker = L.marker(latLng, {icon: redIcon}).addTo(map)
-                            .bindPopup('Destination').openPopup();
+                        input.value = item.display_name || '';
+                        container.style.display = 'none';
+                        
+                        // Validate coordinates
+                        const lat = parseFloat(item.lat);
+                        const lng = parseFloat(item.lon);
+                        
+                        if (isNaN(lat) || isNaN(lng)) {
+                            console.error('Invalid coordinates:', item.lat, item.lon);
+                            return;
+                        }
+                        
+                        const latLng = [lat, lng];
+                        
+                        // Handle markers based on type
+                        if (type === 'origin') {
+                            if (typeof originMarker !== 'undefined' && originMarker && map) {
+                                map.removeLayer(originMarker);
+                            }
+                            if (typeof greenIcon !== 'undefined' && map) {
+                                originMarker = L.marker(latLng, {icon: greenIcon}).addTo(map);
+                                map.setView(latLng, 15);
+                            }
+                        } else {
+                            if (typeof destinationMarker !== 'undefined' && destinationMarker && map) {
+                                map.removeLayer(destinationMarker);
+                            }
+                            if (typeof redIcon !== 'undefined' && map) {
+                                destinationMarker = L.marker(latLng, {icon: redIcon}).addTo(map);
+                            }
+                        }
+                        
+                        // Draw route if both markers exist
+                        if (typeof originMarker !== 'undefined' && typeof destinationMarker !== 'undefined' && 
+                            originMarker && destinationMarker) {
+                            if (typeof drawRoute === 'function') {
+                                drawRoute(originMarker.getLatLng(), destinationMarker.getLatLng());
+                            }
+                            if (typeof updateRideDetails === 'function') {
+                                updateRideDetails();
+                            }
+                        } else if (type === 'origin' && map) {
+                            map.setView(latLng, 15);
+                        }
+                        
+                    } catch (error) {
+                        console.error('Error handling suggestion click:', error);
                     }
-                    
-                    // If both markers exist, draw the route
-                    if (originMarker && destinationMarker) {
-                        drawRoute(originMarker.getLatLng(), destinationMarker.getLatLng());
-                        updateRideDetails();
-                    } else if (type === 'origin') {
-                        map.setView(latLng, 15);
+                };
+                
+                // Add both click and keyboard event listeners
+                suggestionItem.addEventListener('click', clickHandler);
+                suggestionItem.addEventListener('keydown', function(event) {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        clickHandler(event);
                     }
                 });
                 
-                container.appendChild(suggestionItem);
+                // Add hover effects
+                suggestionItem.addEventListener('mouseenter', function() {
+                    this.style.backgroundColor = '#f0f0f0';
+                });
+                
+                suggestionItem.addEventListener('mouseleave', function() {
+                    this.style.backgroundColor = '';
+                });
+                
+                fragment.appendChild(suggestionItem);
             });
+            
+            // Append all items at once
+            container.appendChild(fragment);
+            
         })
         .catch(error => {
+            console.error('Fetch error details:', error);
+            
             if (error.name === 'AbortError') {
                 console.log('Request aborted');
-            } else {
-                console.error('Error fetching suggestions:', error);
-                container.innerHTML = '<div class="suggestion-item">Error loading suggestions</div>';
+                return;
             }
+            
+            container.innerHTML = '<div class="suggestion-item error">Error loading suggestions. Please try again.</div>';
         })
         .finally(() => {
             currentSuggestionsRequest = null;
         });
+}
+
+// Helper function to escape HTML to prevent XSS
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 // Initialize the map
@@ -379,64 +458,6 @@ document.addEventListener('DOMContentLoaded', function() {
     cancelBtn.addEventListener('click', cancelRide);
 });
 
-// Show location suggestions
-function showLocationSuggestions(type) {
-    const suggestions = [
-        {name: "Central Station", address: "Downtown, Main Street", icon: "train"},
-        {name: "City Mall", address: "Shopping District", icon: "shopping-cart"},
-        {name: "Tech Park", address: "Innovation Road", icon: "laptop-code"},
-        {name: "University Campus", address: "North Side", icon: "graduation-cap"},
-        {name: "Riverfront Park", address: "Riverside", icon: "tree"},
-        {name: "International Airport", address: "Airport Road", icon: "plane"}
-    ];
-    
-    const container = type === 'origin' ? originSuggestions : destinationSuggestions;
-    container.innerHTML = '';
-    
-    suggestions.forEach(location => {
-        const item = document.createElement('div');
-        item.className = 'suggestion-item';
-        item.innerHTML = `
-            <div class="suggestion-icon">
-                <i class="fas fa-${location.icon}"></i>
-            </div>
-            <div class="suggestion-text">
-                <div class="suggestion-name">${location.name}</div>
-                <div class="suggestion-address">${location.address}</div>
-            </div>
-        `;
-        
-        item.addEventListener('click', () => {
-            const input = type === 'origin' ? originInput : destinationInput;
-            input.value = location.name;
-            container.style.display = 'none';
-            
-            // Simulate setting a location
-            if (type === 'origin') {
-                if (originMarker) map.removeLayer(originMarker);
-                const lat = 51.50 + (Math.random() * 0.1 - 0.05);
-                const lng = -0.09 + (Math.random() * 0.1 - 0.05);
-                originMarker = L.marker([lat, lng], {icon: greenIcon}).addTo(map)
-                    .bindPopup('Pickup Location').openPopup();
-            } else {
-                if (destinationMarker) map.removeLayer(destinationMarker);
-                const lat = 51.50 + (Math.random() * 0.1 - 0.05);
-                const lng = -0.09 + (Math.random() * 0.1 - 0.05);
-                destinationMarker = L.marker([lat, lng], {icon: redIcon}).addTo(map)
-                    .bindPopup('Destination').openPopup();
-            }
-            
-            if (originMarker && destinationMarker) {
-                drawRoute(originMarker.getLatLng(), destinationMarker.getLatLng());
-                updateRideDetails();
-            }
-        });
-        
-        container.appendChild(item);
-    });
-    
-    container.style.display = 'block';
-}
 
 // Request a ride
 function requestRide() {
