@@ -667,6 +667,7 @@ class GroupManager {
         const end = destinationMarker.getLatLng();
 
         const locationData = {
+            user_id: userData.id,
             origin_lat: start.lat,
             origin_lng: start.lng,
             destination_lat: end.lat,
@@ -798,6 +799,7 @@ class RideApp {
 // APPLICATION INITIALIZATION
 // ============================================================================
 document.addEventListener('DOMContentLoaded', function() {
+    console.log(userData)
     const app = new RideApp();
     app.initialize();
 });

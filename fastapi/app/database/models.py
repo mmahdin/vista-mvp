@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Float
 from .base import Base
 from datetime import datetime, timezone
+from sqlalchemy.orm import relationship
 
 
 class User(Base):
@@ -13,6 +14,10 @@ class User(Base):
     phone_number = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.now(timezone.utc))
+
+    # Add relationship to locations
+    locations = relationship(
+        "Location", back_populates="user", cascade="all, delete-orphan")
 
 
 class Ride(Base):
@@ -33,6 +38,8 @@ class Location(Base):
     __tablename__ = "locations"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False)  # Add foreign key
 
     origin_lat = Column(Float, nullable=False)
     origin_lng = Column(Float, nullable=False)
@@ -41,3 +48,6 @@ class Location(Base):
     destination_lng = Column(Float, nullable=False)
 
     stored_at = Column(DateTime, default=datetime.now(timezone.utc))
+
+    # Add relationship to user
+    user = relationship("User", back_populates="locations")
