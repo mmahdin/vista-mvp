@@ -7,9 +7,9 @@ from app.templates_utils import templates
 from app.database.crud import create_location, get_all_locations_as_dataframe
 from app.database.base import get_db
 from app.database.models import *
-from typing import Annotated
+from typing import Annotated, List
 from datetime import datetime, timezone
-# from utils import *
+from .utils import _add_random_data, get_od_meeting_points
 
 router = APIRouter()
 
@@ -31,6 +31,8 @@ async def ride_page(
     request: Request,
     user=Depends(protected_route)
 ):
+    _add_random_data()
+
     user_response = UserResponse.model_validate(user)
     return templates.TemplateResponse("ride.html", {
         "request": request,
@@ -56,7 +58,7 @@ async def request_ride(
             "end": form_data.get("end_location")}
 
 
-# ==================================================================
+# =====================================================================================
 
 
 class LocationHistoryCreate(BaseModel):
@@ -104,6 +106,19 @@ async def save_location_history(
         )
 
         df_locations = get_all_locations_as_dataframe(db)
+        meeting_points, groups = get_od_meeting_points(
+            df_locations,
+            group_size=3,
+            origin_weight=0.6,  # Prioritize origin proximity slightly more
+            dest_weight=0.4,    # Destination proximity has less weight
+            max_distance=800    # Maximum combined distance for grouping
+        )
+
+        print("Groups formed:", groups)
+        for i, (origin_meeting, dest_meeting) in enumerate(meeting_points):
+            print(f"Group {i+1}:")
+            print(f"  Origin meeting point: {origin_meeting}")
+            print(f"  Destination meeting point: {dest_meeting}")
 
         return location_history
 
@@ -114,3 +129,36 @@ async def save_location_history(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error saving location: {str(e)}"
         )
+
+
+# =====================================================================================
+
+@router.get("/api/random-locations/")
+async def get_random_locations(db: Session = Depends(get_db)):
+    """
+    Get all random location data from the database
+    """
+    try:
+        locations = db.query(Location).all()
+
+        location_data = []
+        for location in locations:
+            location_data.append({
+                "id": location.id,
+                "user_id": location.user_id,
+                "origin_lat": location.origin_lat,
+                "origin_lng": location.origin_lng,
+                "destination_lat": location.destination_lat,
+                "destination_lng": location.destination_lng,
+                "stored_at": location.stored_at.isoformat() if location.stored_at else None
+            })
+
+        return {
+            "success": True,
+            "data": location_data,
+            "count": len(location_data)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Database error: {str(e)}")

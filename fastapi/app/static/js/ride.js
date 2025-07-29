@@ -14,6 +14,7 @@ const CONFIG = {
     PROGRESS_INCREMENT: 5
 };
 
+
 const ICONS = {
     green: L.icon({
         iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
@@ -28,6 +29,21 @@ const ICONS = {
         iconSize: [25, 41],
         iconAnchor: [12, 41],
         shadowSize: [41, 41]
+    }),
+    // NEW ICONS FOR RANDOM DATA
+    blue: L.icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+        iconSize: [20, 32],
+        iconAnchor: [10, 32],
+        shadowSize: [32, 32]
+    }),
+    orange: L.icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+        iconSize: [20, 32],
+        iconAnchor: [10, 32],
+        shadowSize: [32, 32]
     })
 };
 
@@ -319,6 +335,11 @@ class MapManager {
         this.destinationMarker = null;
         this.routeLine = null;
         this.currentLocation = CONFIG.DEFAULT_LOCATION;
+        
+        // NEW: Arrays to store random data markers
+        this.randomOriginMarkers = [];
+        this.randomDestinationMarkers = [];
+        this.randomRouteLines = [];
     }
 
     initialize() {
@@ -336,6 +357,123 @@ class MapManager {
         }).addTo(this.map);
 
         this.setupMapEventListeners();
+        
+        // NEW: Load random data on initialization
+        this.loadRandomLocationData();
+    }
+
+    // NEW: Method to fetch and display random location data
+    async loadRandomLocationData() {
+        try {
+            const response = await fetch('/api/random-locations/');
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.success && result.data) {
+                this.displayRandomLocations(result.data);
+                console.log(`Loaded ${result.count} random locations`);
+            }
+            
+        } catch (error) {
+            console.error('Error loading random location data:', error);
+        }
+    }
+
+    // NEW: Method to display random locations on the map
+    displayRandomLocations(locations) {
+        // Clear existing random markers
+        this.clearRandomMarkers();
+        
+        locations.forEach((location, index) => {
+            // Create origin marker (blue)
+            const originLatLng = L.latLng(location.origin_lat, location.origin_lng);
+            const originMarker = L.marker(originLatLng, { 
+                icon: ICONS.blue,
+                zIndexOffset: -100 // Put random markers behind user markers
+            }).addTo(this.map);
+            
+            // Create destination marker (orange)
+            const destLatLng = L.latLng(location.destination_lat, location.destination_lng);
+            const destMarker = L.marker(destLatLng, { 
+                icon: ICONS.orange,
+                zIndexOffset: -100
+            }).addTo(this.map);
+            
+            // Add popup information
+            originMarker.bindPopup(`
+                <div style="text-align: center;">
+                    <strong>Random Origin #${location.user_id}</strong><br>
+                    <small>Lat: ${location.origin_lat.toFixed(6)}</small><br>
+                    <small>Lng: ${location.origin_lng.toFixed(6)}</small><br>
+                    <small>Stored: ${new Date(location.stored_at).toLocaleDateString()}</small>
+                </div>
+            `);
+            
+            destMarker.bindPopup(`
+                <div style="text-align: center;">
+                    <strong>Random Destination #${location.user_id}</strong><br>
+                    <small>Lat: ${location.destination_lat.toFixed(6)}</small><br>
+                    <small>Lng: ${location.destination_lng.toFixed(6)}</small><br>
+                    <small>Stored: ${new Date(location.stored_at).toLocaleDateString()}</small>
+                </div>
+            `);
+            
+            // Create a subtle line between origin and destination
+            const routeLine = L.polyline([originLatLng, destLatLng], {
+                color: '#6c757d',
+                weight: 2,
+                opacity: 0.4,
+                dashArray: '5, 10'
+            }).addTo(this.map);
+            
+            // Store references for later removal
+            this.randomOriginMarkers.push(originMarker);
+            this.randomDestinationMarkers.push(destMarker);
+            this.randomRouteLines.push(routeLine);
+        });
+    }
+
+    // NEW: Method to clear random markers
+    clearRandomMarkers() {
+        // Remove origin markers
+        this.randomOriginMarkers.forEach(marker => {
+            this.map.removeLayer(marker);
+        });
+        this.randomOriginMarkers = [];
+        
+        // Remove destination markers
+        this.randomDestinationMarkers.forEach(marker => {
+            this.map.removeLayer(marker);
+        });
+        this.randomDestinationMarkers = [];
+        
+        // Remove route lines
+        this.randomRouteLines.forEach(line => {
+            this.map.removeLayer(line);
+        });
+        this.randomRouteLines = [];
+    }
+
+    // NEW: Method to toggle random data visibility
+    toggleRandomDataVisibility() {
+        const hasRandomData = this.randomOriginMarkers.length > 0;
+        
+        if (hasRandomData) {
+            this.clearRandomMarkers();
+            return false; // Data is now hidden
+        } else {
+            this.loadRandomLocationData();
+            return true; // Data is now visible
+        }
+    }
+
+    // NEW: Method to refresh random data
+    async refreshRandomData() {
+        await this.loadRandomLocationData();
     }
 
     setupMapEventListeners() {
@@ -437,19 +575,26 @@ class MapManager {
         }
         
         const latLng = L.latLng(finalCoords[0], finalCoords[1]);
-        
+        console.log(latLng)
+
         // Handle marker placement based on type
         if (type === 'origin') {
             if (this.originMarker) {
                 this.map.removeLayer(this.originMarker);
             }
-            this.originMarker = L.marker(latLng, { icon: ICONS.green }).addTo(this.map);
+            this.originMarker = L.marker(latLng, { 
+                icon: ICONS.green,
+                zIndexOffset: 100 // Put user markers on top
+            }).addTo(this.map);
             this.map.setView(latLng, 15);
         } else {
             if (this.destinationMarker) {
                 this.map.removeLayer(this.destinationMarker);
             }
-            this.destinationMarker = L.marker(latLng, { icon: ICONS.red }).addTo(this.map);
+            this.destinationMarker = L.marker(latLng, { 
+                icon: ICONS.red,
+                zIndexOffset: 100 // Put user markers on top
+            }).addTo(this.map);
         }
         
         // Draw route if both markers exist
@@ -519,7 +664,10 @@ class MapManager {
                         this.map.removeLayer(this.originMarker);
                     }
                     
-                    this.originMarker = L.marker(userLocation, { icon: ICONS.green })
+                    this.originMarker = L.marker(userLocation, { 
+                        icon: ICONS.green,
+                        zIndexOffset: 100 
+                    })
                         .addTo(this.map)
                         .bindPopup('Your location')
                         .openPopup();
@@ -549,7 +697,6 @@ class MapManager {
         };
     }
 }
-
 // ============================================================================
 // RIDE DETAILS MANAGER
 // ============================================================================
@@ -729,6 +876,8 @@ class RideApp {
         const destinationInput = document.getElementById('destination-input');
         const originSuggestions = document.getElementById('origin-suggestions');
         const destinationSuggestions = document.getElementById('destination-suggestions');
+        // NEW: Random data control button event listeners
+        const toggleBtn = document.getElementById('toggle-random-data-btn');
 
         originInput.addEventListener('input', () => {
             this.suggestionsManager.debouncedFetch(originInput.value, 'origin', originSuggestions);
@@ -751,7 +900,7 @@ class RideApp {
             }
         });
 
-        // Button event listeners
+        // Existing button event listeners
         document.getElementById('locate-btn').addEventListener('click', () => {
             this.mapManager.getCurrentLocation((error, message) => {
                 if (error) {
@@ -773,6 +922,19 @@ class RideApp {
         document.getElementById('cancel-btn').addEventListener('click', () => {
             this.rideManager.cancelRide();
         });
+
+        
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+                const isVisible = this.mapManager.toggleRandomDataVisibility();
+                toggleBtn.innerHTML = isVisible ? 
+                    '<i class="fas fa-eye-slash"></i>' : 
+                    '<i class="fas fa-eye"></i>';
+                toggleBtn.title = isVisible ? 
+                    'Hide Random Location Data' : 
+                    'Show Random Location Data';
+            });
+        }
 
         // Click outside to hide suggestions
         document.addEventListener('click', (e) => {
@@ -799,7 +961,6 @@ class RideApp {
 // APPLICATION INITIALIZATION
 // ============================================================================
 document.addEventListener('DOMContentLoaded', function() {
-    console.log(userData)
     const app = new RideApp();
     app.initialize();
 });

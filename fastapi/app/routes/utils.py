@@ -1,3 +1,7 @@
+import math
+import random
+from app.database.crud import create_location
+from app.database.base import SessionLocal
 import osmnx as ox
 import networkx as nx
 from collections import defaultdict
@@ -10,32 +14,35 @@ def get_nearest_nodes_od(df, network_type='walk'):
     Find nearest OSM nodes for origin-destination pairs.
 
     Args:
-        df: DataFrame with 'origin_lat', 'origin_lon', 'dest_lat', 'dest_lon' columns
+        df: DataFrame with 'origin_lat', 'origin_lng', 'destination_lat', 'destination_lng' columns
         network_type: Type of network for OSMNX graph (default: 'walk')
 
     Returns:
         DataFrame with added 'origin_node' and 'dest_node' columns, and the graph
     """
     # Get bounding box for all points (origins and destinations)
-    all_lats = df[['origin_lat', 'dest_lat']].values.flatten()
-    all_lons = df[['origin_lon', 'dest_lon']].values.flatten()
+    all_lats = df[['origin_lat', 'destination_lat']].values.flatten()
+    all_lons = df[['origin_lng', 'destination_lng']].values.flatten()
 
-    G = ox.graph_from_bbox(
-        north=all_lats.max(),
-        south=all_lats.min(),
-        east=all_lons.max(),
-        west=all_lons.min(),
-        network_type=network_type
-    )
+    # Use bbox parameter instead of individual north/south/east/west parameters
+    # bbox = (36.0087995, 35.9522156, 50.7613994, 50.6636533)
+
+    # G = ox.graph_from_bbox(
+    #     bbox=bbox,
+    #     network_type=network_type
+    # )
+
+    place = "Mehestan, Alborz Province, Iran"
+    G = ox.graph_from_place(place, network_type=network_type)
 
     # Find nearest nodes for origins
     df['origin_node'] = ox.distance.nearest_nodes(
-        G, X=df['origin_lon'].values, Y=df['origin_lat'].values, return_dist=False
+        G, X=df['origin_lng'].values, Y=df['origin_lat'].values, return_dist=False
     )
 
     # Find nearest nodes for destinations
     df['dest_node'] = ox.distance.nearest_nodes(
-        G, X=df['dest_lon'].values, Y=df['dest_lat'].values, return_dist=False
+        G, X=df['destination_lng'].values, Y=df['destination_lat'].values, return_dist=False
     )
 
     return df, G
@@ -155,7 +162,7 @@ def find_optimal_meeting_points(group_indices, df, distance_matrix, G, all_nodes
         all_nodes: List of all available nodes to consider as meeting points
 
     Returns:
-        Tuple of ((origin_lat, origin_lon), (dest_lat, dest_lon)) for meeting points
+        Tuple of ((origin_lat, origin_lng), (destination_lat, destination_lng)) for meeting points
     """
     group_data = df.iloc[group_indices]
 
@@ -232,7 +239,7 @@ def get_od_meeting_points(df, network_type='walk', cutoff=1000, group_size=3,
     Find optimal meeting points for groups of people with similar origin-destination pairs.
 
     Args:
-        df: DataFrame with 'origin_lat', 'origin_lon', 'dest_lat', 'dest_lon' columns
+        df: DataFrame with 'origin_lat', 'origin_lng', 'destination_lat', 'destination_lng' columns
         network_type: Type of network for OSMNX graph (default: 'walk')
         cutoff: Maximum walking distance for distance matrix (default: 1000)
         group_size: Size of each group (default: 3)
@@ -241,7 +248,7 @@ def get_od_meeting_points(df, network_type='walk', cutoff=1000, group_size=3,
         max_distance: Maximum allowed combined distance for grouping
 
     Returns:
-        List of tuples: [((origin_lat, origin_lon), (dest_lat, dest_lon)), ...]
+        List of tuples: [((origin_lat, origin_lng), (destination_lat, destination_lng)), ...]
         Each tuple contains the meeting points for origins and destinations
     """
     # Step 1: Get nearest OSM nodes for origins and destinations
@@ -277,9 +284,9 @@ import pandas as pd
 df_od = pd.DataFrame({
     'person_id': ['A', 'B', 'C', 'D', 'E', 'F'],
     'origin_lat': [40.7589, 40.7614, 40.7505, 40.7580, 40.7600, 40.7520],
-    'origin_lon': [-73.9851, -73.9776, -73.9934, -73.9855, -73.9800, -73.9900],
-    'dest_lat': [40.7489, 40.7514, 40.7405, 40.7480, 40.7500, 40.7420],
-    'dest_lon': [-73.9951, -73.9876, -74.0034, -73.9955, -73.9900, -74.0000]
+    'origin_lng': [-73.9851, -73.9776, -73.9934, -73.9855, -73.9800, -73.9900],
+    'destination_lat': [40.7489, 40.7514, 40.7405, 40.7480, 40.7500, 40.7420],
+    'destination_lng': [-73.9951, -73.9876, -74.0034, -73.9955, -73.9900, -74.0000]
 })
 
 # Get meeting points for origin-destination pairs
@@ -297,3 +304,76 @@ for i, (origin_meeting, dest_meeting) in enumerate(meeting_points):
     print(f"  Origin meeting point: {origin_meeting}")
     print(f"  Destination meeting point: {dest_meeting}")
 """
+
+
+def get_random_location_in_circle(center_lat, center_lng, radius_km=1, num_points=20):
+    # Earth's radius in kilometers
+    EARTH_RADIUS_KM = 6371.0
+
+    # Convert center coordinates to radians
+    center_lat_rad = math.radians(center_lat)
+    center_lng_rad = math.radians(center_lng)
+
+    random_points = []
+
+    for _ in range(num_points):
+        random_distance = radius_km * math.sqrt(random.random())
+        random_bearing = random.random() * 2 * math.pi
+        angular_distance = random_distance / EARTH_RADIUS_KM
+
+        new_lat_rad = math.asin(
+            math.sin(center_lat_rad) * math.cos(angular_distance) +
+            math.cos(center_lat_rad) * math.sin(angular_distance) *
+            math.cos(random_bearing)
+        )
+
+        new_lng_rad = center_lng_rad + math.atan2(
+            math.sin(random_bearing) * math.sin(angular_distance) *
+            math.cos(center_lat_rad),
+            math.cos(angular_distance) -
+            math.sin(center_lat_rad) * math.sin(new_lat_rad)
+        )
+
+        new_lat = math.degrees(new_lat_rad)
+        new_lng = math.degrees(new_lng_rad)
+
+        new_lng = ((new_lng + 180) % 360) - 180
+
+        random_points.append((new_lat, new_lng))
+
+    # Return single tuple if only one point requested, otherwise return list
+    return random_points[0] if num_points == 1 else random_points
+
+
+def _add_random_data():
+    with SessionLocal() as db:
+        data = [
+            {
+                'origin': [35.9700692, 50.7306363],
+                'dest': [35.9934509, 50.7471121]
+            },
+            {
+                'origin': [35.9784854, 50.7088399],
+                'dest': [35.9609244, 50.6780187]
+            }
+        ]
+
+        user_id_start = 10000
+
+        cnt = 0
+        for item in data:
+            origin_random = get_random_location_in_circle(
+                item['origin'][0], item['origin'][1])
+            dest_random = get_random_location_in_circle(
+                item['dest'][0], item['dest'][1])
+
+            for i in range(len(dest_random)):
+                location_history = create_location(
+                    db=db,
+                    user_id=user_id_start+cnt,
+                    origin_lat=origin_random[i][0],
+                    origin_lng=origin_random[i][1],
+                    destination_lat=dest_random[i][0],
+                    destination_lng=dest_random[i][1]
+                )
+                cnt += 1

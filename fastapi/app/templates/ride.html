@@ -6,7 +6,7 @@
     <title>Book a Ride</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="/static/css/ride.css?v=15">
+    <link rel="stylesheet" href="/static/css/ride.css?v=20">
 </head>
 <body>
     <!-- Background decoration -->
@@ -39,6 +39,34 @@
                     <button class="control-btn" id="clear-btn">
                         <i class="fas fa-times"></i>
                     </button>
+                </div>
+            </div>
+
+            <!-- NEW: Random Data Controls -->
+            <div class="random-data-controls">
+                <button class="control-btn random-control-btn" id="toggle-random-data-btn" title="Toggle Random Location Data">
+                    <i class="fas fa-eye-slash"></i>
+                </button>
+            </div>
+
+            <!-- NEW: Map Legend -->
+            <div id="map-legend" class="legend">
+                <h4><i class="fas fa-map-marker-alt"></i> Map Legend</h4>
+                <div class="legend-item">
+                    <span class="legend-color" style="background-color: #4CAF50;"></span>
+                    <span>Your Origin</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-color" style="background-color: #F44336;"></span>
+                    <span>Your Destination</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-color" style="background-color: #2196F3;"></span>
+                    <span>Random Origins</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-color" style="background-color: #FF9800;"></span>
+                    <span>Random Destinations</span>
                 </div>
             </div>
         </section>
@@ -162,6 +190,6 @@
     <script>
         const userData = {{ user.model_dump_json() | safe }};
     </script>
-    <script src="/static/js/ride.js?v=23"></script>
+    <script src="/static/js/ride.js?v=28"></script>
 </body>
 </html>
