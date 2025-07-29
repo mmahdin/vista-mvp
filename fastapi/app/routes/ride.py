@@ -32,7 +32,7 @@ async def ride_page(
     request: Request,
     user=Depends(protected_route)
 ):
-    await add_random_data()
+    # await add_random_data()
 
     user_response = UserResponse.model_validate(user)
     return templates.TemplateResponse("ride.html", {
@@ -83,64 +83,62 @@ async def save_location_history(
     location_data: LocationHistoryCreate,
     db: Annotated[Session, Depends(get_db)]
 ):
-    # try:
-    # Check if user exists
-    user = db.query(User).filter(User.id == location_data.user_id).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+    try:
+        # Check if user exists
+        user = db.query(User).filter(User.id == location_data.user_id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+        # Create new location history
+        create_location(
+            db=db,
+            user_id=location_data.user_id,
+            origin_lat=location_data.origin_lat,
+            origin_lng=location_data.origin_lng,
+            destination_lat=location_data.destination_lat,
+            destination_lng=location_data.destination_lng
         )
 
-    # Create new location history
-    create_location(
-        db=db,
-        user_id=location_data.user_id,
-        origin_lat=location_data.origin_lat,
-        origin_lng=location_data.origin_lng,
-        destination_lat=location_data.destination_lat,
-        destination_lng=location_data.destination_lng
-    )
+        # Get locations and calculate groups
+        df_locations = get_all_locations_as_dataframe(db)
+        meeting_points, groups = get_od_meeting_points(
+            df_locations,
+            group_size=3,
+            origin_weight=0.6,
+            dest_weight=0.4,
+            max_distance=800
+        )
 
-    # Get locations and calculate groups
-    df_locations = get_all_locations_as_dataframe(db)
-    meeting_points, groups = get_od_meeting_points(
-        df_locations,
-        group_size=3,
-        origin_weight=0.6,
-        dest_weight=0.4,
-        max_distance=800
-    )
+        # Find groups containing the current user
+        matching_groups = [lst for lst in groups if user.id in lst][0]
+        matching_groups.remove(user.id)
 
-    # Find groups containing the current user
-    matching_groups = [lst for lst in groups if user.id in lst][0]
-    print(user.id)
-    print(matching_groups)
-    matching_groups.remove(user.id)
+        ride_users = []
 
-    ride_users = []
+        # Process each matching group
+        for idx in matching_groups:
+            location = df_locations[df_locations['user_id'] == idx].squeeze()
+            ride_users.append({
+                "id": location.id,
+                "user_id": location.user_id,
+                "origin_lat": location.origin_lat,
+                "origin_lng": location.origin_lng,
+                "destination_lat": location.destination_lat,
+                "destination_lng": location.destination_lng,
+                "stored_at": location.stored_at
+            })
+        return ride_users
 
-    # Process each matching group
-    for idx in matching_groups:
-        location = df_locations[df_locations['id'] == idx].squeeze()
-        ride_users.append({
-            "id": location.id,
-            "user_id": location.user_id,
-            "origin_lat": location.origin_lat,
-            "origin_lng": location.origin_lng,
-            "destination_lat": location.destination_lat,
-            "destination_lng": location.destination_lng,
-            "stored_at": location.stored_at
-        })
-    return ride_users
-
-    # except HTTPException:
-    #     raise
-    # except Exception as e:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-    #         detail=f"Error saving location: {str(e)}"
-    #     )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error saving location: {str(e)}"
+        )
 # =====================================================================================
 
 

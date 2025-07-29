@@ -114,7 +114,7 @@ def group_people_by_od_similarity(df, distance_matrix, group_size=3,
     Group people based on similarity of their origin-destination pairs.
 
     Args:
-        df: DataFrame with origin_node and dest_node columns
+        df: DataFrame with origin_node, dest_node, and user_id columns
         distance_matrix: Dictionary of walking distances between nodes
         group_size: Size of each group (default: 3)
         origin_weight: Weight for origin proximity (default: 0.5)
@@ -122,7 +122,7 @@ def group_people_by_od_similarity(df, distance_matrix, group_size=3,
         max_distance: Maximum allowed combined distance for grouping
 
     Returns:
-        List of groups, each containing person indices
+        List of groups, each containing user_id values
     """
     people = df.to_dict('records')
     ungrouped = set(range(len(people)))
@@ -149,10 +149,12 @@ def group_people_by_od_similarity(df, distance_matrix, group_size=3,
         similarities.sort(key=lambda x: x[1])
 
         if len(similarities) >= group_size - 1:
-            group = [current_idx]
+            # Create group with user_id values instead of indices
+            group = [current_person['user_id']]
             for i in range(group_size - 1):
                 member_idx = similarities[i][0]
-                group.append(member_idx)
+                member_user_id = people[member_idx]['user_id']
+                group.append(member_user_id)
                 ungrouped.remove(member_idx)
             groups.append(group)
         # If not enough similar people, put the person back for later consideration
@@ -161,13 +163,13 @@ def group_people_by_od_similarity(df, distance_matrix, group_size=3,
     return groups
 
 
-def find_optimal_meeting_points(group_indices, df, distance_matrix, G, all_nodes):
+def find_optimal_meeting_points(group_user_ids, df, distance_matrix, G, all_nodes):
     """
     Find optimal meeting points for origin and destination for a group.
 
     Args:
-        group_indices: List of person indices in the group
-        df: DataFrame with origin_node and dest_node columns
+        group_user_ids: List of user_id values in the group
+        df: DataFrame with origin_node, dest_node, and user_id columns
         distance_matrix: Dictionary of walking distances between nodes
         G: OSMNX graph
         all_nodes: List of all available nodes to consider as meeting points
@@ -175,7 +177,8 @@ def find_optimal_meeting_points(group_indices, df, distance_matrix, G, all_nodes
     Returns:
         Tuple of ((origin_lat, origin_lng), (destination_lat, destination_lng)) for meeting points
     """
-    group_data = df.iloc[group_indices]
+    # Filter dataframe by user_id values instead of using positional indexing
+    group_data = df[df['user_id'].isin(group_user_ids)]
 
     # Find central origin node (can be any node on the map)
     origin_nodes = group_data['origin_node'].tolist()
