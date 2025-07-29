@@ -895,3 +895,8 @@ body {
         transform: rotate(360deg);
     }
 }
+
+.group-popup {
+    text-align: center;
+    font-size: 14px;
+}

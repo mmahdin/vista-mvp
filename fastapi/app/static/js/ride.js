@@ -340,6 +340,11 @@ class MapManager {
         this.randomOriginMarkers = [];
         this.randomDestinationMarkers = [];
         this.randomRouteLines = [];
+
+        // NEW: Arrays to store grouped ride markers
+        this.groupedOriginMarkers = [];
+        this.groupedDestinationMarkers = [];
+        this.groupedRouteLines = [];
     }
 
     initialize() {
@@ -367,12 +372,12 @@ class MapManager {
         try {
             const response = await fetch('/api/random-locations/');
             
+            
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             
             const result = await response.json();
-            
             if (result.success && result.data) {
                 this.displayRandomLocations(result.data);
                 console.log(`Loaded ${result.count} random locations`);
@@ -422,18 +427,10 @@ class MapManager {
                 </div>
             `);
             
-            // Create a subtle line between origin and destination
-            const routeLine = L.polyline([originLatLng, destLatLng], {
-                color: '#6c757d',
-                weight: 2,
-                opacity: 0.4,
-                dashArray: '5, 10'
-            }).addTo(this.map);
             
             // Store references for later removal
             this.randomOriginMarkers.push(originMarker);
             this.randomDestinationMarkers.push(destMarker);
-            this.randomRouteLines.push(routeLine);
         });
     }
 
@@ -461,6 +458,7 @@ class MapManager {
     // NEW: Method to toggle random data visibility
     toggleRandomDataVisibility() {
         const hasRandomData = this.randomOriginMarkers.length > 0;
+        console.log(this.randomOriginMarkers.length)
         
         if (hasRandomData) {
             this.clearRandomMarkers();
@@ -474,6 +472,87 @@ class MapManager {
     // NEW: Method to refresh random data
     async refreshRandomData() {
         await this.loadRandomLocationData();
+    }
+
+    // NEW: Method to display grouped ride locations on the map
+    displayGroupedRides(groupedRides) {
+        // Clear existing grouped markers before displaying new ones
+        this.clearGroupedMarkers();
+
+        groupedRides.forEach(ride => {
+            const originLatLng = L.latLng(ride.origin_lat, ride.origin_lng);
+            const destinationLatLng = L.latLng(ride.destination_lat, ride.destination_lng);
+
+            // Create origin marker (e.g., blue)
+            const originMarker = L.marker(originLatLng, {
+                icon: ICONS.blue,
+                zIndexOffset: -50 // Slightly above random markers, below user markers
+            }).addTo(this.map);
+
+            // Create destination marker (e.g., orange)
+            const destinationMarker = L.marker(destinationLatLng, {
+                icon: ICONS.orange,
+                zIndexOffset: -50
+            }).addTo(this.map);
+
+            // Add popup information
+            originMarker.bindPopup(`
+                <div style="text-align: center;">
+                    <strong>Grouped Origin (User ID: ${ride.user_id})</strong><br>
+                    <small>Lat: ${ride.origin_lat.toFixed(6)}</small><br>
+                    <small>Lng: ${ride.origin_lng.toFixed(6)}</small><br>
+                </div>
+            `);
+            
+            destinationMarker.bindPopup(`
+                <div style="text-align: center;">
+                    <strong>Grouped Destination (User ID: ${ride.user_id})</strong><br>
+                    <small>Lat: ${ride.destination_lat.toFixed(6)}</small><br>
+                    <small>Lng: ${ride.destination_lng.toFixed(6)}</small><br>
+                </div>
+            `);
+
+            // Store references
+            this.groupedOriginMarkers.push(originMarker);
+            this.groupedDestinationMarkers.push(destinationMarker);
+
+            // Optionally, draw a line for each grouped ride
+            const routeLine = L.polyline([originLatLng, destinationLatLng], {
+                color: '#8a2be2', // A different color for grouped routes
+                weight: 3,
+                opacity: 0.7,
+                dashArray: '5, 5'
+            }).addTo(this.map);
+            this.groupedRouteLines.push(routeLine);
+        });
+
+        // Optionally, fit map to bounds of all grouped rides if there are any
+        if (this.groupedOriginMarkers.length > 0) {
+            const allGroupedPoints = [
+                ...this.groupedOriginMarkers.map(m => m.getLatLng()),
+                ...this.groupedDestinationMarkers.map(m => m.getLatLng())
+            ];
+            const bounds = L.latLngBounds(allGroupedPoints);
+            this.map.fitBounds(bounds, { padding: [50, 50] });
+        }
+    }
+
+    // NEW: Method to clear grouped markers
+    clearGroupedMarkers() {
+        this.groupedOriginMarkers.forEach(marker => {
+            this.map.removeLayer(marker);
+        });
+        this.groupedOriginMarkers = [];
+
+        this.groupedDestinationMarkers.forEach(marker => {
+            this.map.removeLayer(marker);
+        });
+        this.groupedDestinationMarkers = [];
+
+        this.groupedRouteLines.forEach(line => {
+            this.map.removeLayer(line);
+        });
+        this.groupedRouteLines = [];
     }
 
     setupMapEventListeners() {
@@ -575,7 +654,6 @@ class MapManager {
         }
         
         const latLng = L.latLng(finalCoords[0], finalCoords[1]);
-        console.log(latLng)
 
         // Handle marker placement based on type
         if (type === 'origin') {
@@ -647,6 +725,8 @@ class MapManager {
             this.map.removeLayer(this.routeLine);
             this.routeLine = null;
         }
+        // Also clear grouped markers when clearing user markers
+        this.clearGroupedMarkers();
     }
 
     getCurrentLocation(callback) {
@@ -746,14 +826,6 @@ class GroupManager {
 
     async requestRide() {
         const markers = this.mapManager.getMarkers();
-
-        // Save location to DB
-        try {
-            const result = await this.saveLocation(markers.origin, markers.destination);
-            console.log('Location saved successfully:', result);
-        } catch (error) {
-            console.error('Failed to save location:', error);
-        }
         
         if (!markers.origin || !markers.destination) {
             this.notificationManager.show('Please select both origin and destination locations', false);
@@ -764,12 +836,27 @@ class GroupManager {
         this.grouptBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finding a driver...';
         this.grouptBtn.disabled = true;
 
-        // Simulate API request
-        setTimeout(() => {
-            this.showRideInProgress();
-            this.startProgressAnimation();
-            this.notificationManager.show('Ride requested successfully! Driver assigned.');
-        }, CONFIG.RIDE_REQUEST_DELAY);
+        // Save location to DB and get grouped rides
+        try {
+            const groupedRides = await this.saveLocation(markers.origin, markers.destination);
+            console.log('Location saved successfully. Grouped rides:', groupedRides);
+            
+            // Display grouped rides on the map
+            this.mapManager.displayGroupedRides(groupedRides);
+
+            // Simulate API request (moved after location saving)
+            setTimeout(() => {
+                this.showRideInProgress();
+                this.startProgressAnimation();
+                this.notificationManager.show('Ride requested successfully! Driver assigned.');
+            }, CONFIG.RIDE_REQUEST_DELAY);
+
+        } catch (error) {
+            console.error('Failed to request ride or save location:', error);
+            this.notificationManager.show('Failed to request ride. Please try again.', false);
+            this.grouptBtn.innerHTML = '<i class="fas fa-car"></i> Request Ride';
+            this.grouptBtn.disabled = false;
+        }
     }
 
     showRideInProgress() {
@@ -806,6 +893,9 @@ class GroupManager {
         this.rideStatus.style.display = 'none';
         this.progressBar.style.width = '0%';
         
+        // Clear any displayed grouped markers when cancelling a ride
+        this.mapManager.clearGroupedMarkers();
+
         this.notificationManager.show('Ride cancelled successfully');
     }
 
@@ -813,8 +903,12 @@ class GroupManager {
         const start = originMarker.getLatLng();
         const end = destinationMarker.getLatLng();
 
+        // Assuming 'userData' is globally available or passed to the class
+        // Make sure userData.id is defined, or replace with a static ID for testing
+        const userId = typeof userData !== 'undefined' && userData.id ? userData.id : 1; // Default to 1 if userData.id is not available
+
         const locationData = {
-            user_id: userData.id,
+            user_id: userId,
             origin_lat: start.lat,
             origin_lng: start.lng,
             destination_lat: end.lat,
@@ -831,11 +925,12 @@ class GroupManager {
             });
 
             if (!response.ok) {
-                throw new Error(`Error: ${response.status}`);
+                const errorText = await response.text(); // Get more detailed error from server
+                throw new Error(`Error: ${response.status} - ${errorText}`);
             }
 
             const result = await response.json();
-            return result;
+            return result; // This result is the List[LocationHistoryResponse]
 
         } catch (error) {
             console.error('Error saving location:', error);
@@ -949,6 +1044,8 @@ class RideApp {
 
     clearAll() {
         this.mapManager.clearMarkers();
+        // Also clear grouped markers
+        this.mapManager.clearGroupedMarkers(); 
         document.getElementById('origin-input').value = "";
         document.getElementById('destination-input').value = "";
         document.getElementById('origin-suggestions').style.display = 'none';

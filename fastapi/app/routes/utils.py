@@ -1,3 +1,13 @@
+from shapely.geometry import Point
+import geopandas as gpd
+from geopy.distance import geodesic
+from shapely.geometry import LineString
+from shapely.ops import nearest_points
+import overpy
+import aiohttp
+import asyncio
+import time
+import requests
 import math
 import random
 from app.database.crud import create_location
@@ -7,6 +17,10 @@ import networkx as nx
 from collections import defaultdict
 import numpy as np
 from itertools import combinations
+
+# data-name="شهرک ریحانه, Mehestan, Savojbolagh Central District, Savojbolagh County, Alborz Province, Iran"
+place = "Savojbolagh County, Alborz Province, Iran"
+G = ox.graph_from_place(place, network_type='walk')
 
 
 def get_nearest_nodes_od(df, network_type='walk'):
@@ -31,9 +45,6 @@ def get_nearest_nodes_od(df, network_type='walk'):
     #     bbox=bbox,
     #     network_type=network_type
     # )
-
-    place = "Mehestan, Alborz Province, Iran"
-    G = ox.graph_from_place(place, network_type=network_type)
 
     # Find nearest nodes for origins
     df['origin_node'] = ox.distance.nearest_nodes(
@@ -276,45 +287,22 @@ def get_od_meeting_points(df, network_type='walk', cutoff=1000, group_size=3,
     return meeting_points, groups
 
 
-# Example usage for origin-destination clustering:
-"""
-import pandas as pd
+# ============================================================================
 
-# Create sample data with origin-destination pairs
-df_od = pd.DataFrame({
-    'person_id': ['A', 'B', 'C', 'D', 'E', 'F'],
-    'origin_lat': [40.7589, 40.7614, 40.7505, 40.7580, 40.7600, 40.7520],
-    'origin_lng': [-73.9851, -73.9776, -73.9934, -73.9855, -73.9800, -73.9900],
-    'destination_lat': [40.7489, 40.7514, 40.7405, 40.7480, 40.7500, 40.7420],
-    'destination_lng': [-73.9951, -73.9876, -74.0034, -73.9955, -73.9900, -74.0000]
-})
-
-# Get meeting points for origin-destination pairs
-meeting_points, groups = get_od_meeting_points(
-    df_od, 
-    group_size=3,
-    origin_weight=0.6,  # Prioritize origin proximity slightly more
-    dest_weight=0.4,    # Destination proximity has less weight
-    max_distance=800    # Maximum combined distance for grouping
-)
-
-print("Groups formed:", groups)
-for i, (origin_meeting, dest_meeting) in enumerate(meeting_points):
-    print(f"Group {i+1}:")
-    print(f"  Origin meeting point: {origin_meeting}")
-    print(f"  Destination meeting point: {dest_meeting}")
-"""
-
-
-def get_random_location_in_circle(center_lat, center_lng, radius_km=1, num_points=20):
-    # Earth's radius in kilometers
+async def get_random_location_in_circle_offline_precise(center_lat, center_lng, radius_km=1, num_points=150):
+    """
+    Generate random locations and snap them to actual road segments (not just nodes).
+    This is the most accurate version.
+    """
     EARTH_RADIUS_KM = 6371.0
 
-    # Convert center coordinates to radians
+    # Download road network once (cached automatically)
+    nodes, edges = ox.graph_to_gdfs(G)
+
     center_lat_rad = math.radians(center_lat)
     center_lng_rad = math.radians(center_lng)
 
-    random_points = []
+    snapped_points = []
 
     for _ in range(num_points):
         random_distance = radius_km * math.sqrt(random.random())
@@ -337,40 +325,97 @@ def get_random_location_in_circle(center_lat, center_lng, radius_km=1, num_point
         new_lat = math.degrees(new_lat_rad)
         new_lng = math.degrees(new_lng_rad)
 
+        # Ensure longitude is within -180 to +180
         new_lng = ((new_lng + 180) % 360) - 180
 
-        random_points.append((new_lat, new_lng))
+        # Snap to nearest point on actual road edge (most accurate)
+        try:
+            snapped_lat, snapped_lng = snap_point_to_road_precise(
+                new_lat, new_lng, G)
+            snapped_points.append((snapped_lat, snapped_lng))
+        except Exception as e:
+            print(f"Warning: Could not snap {new_lat}, {new_lng}: {e}")
+            snapped_points.append((new_lat, new_lng))
 
-    # Return single tuple if only one point requested, otherwise return list
-    return random_points[0] if num_points == 1 else random_points
+    return snapped_points[0] if num_points == 1 else snapped_points
 
 
-def _add_random_data():
+# Even better approach: Using OSMnx's built-in nearest_edges function
+def snap_point_to_road_precise(lat, lng, G):
+    """
+    Most accurate way to snap to roads using OSMnx's built-in functionality.
+    This finds the nearest point on the actual road edge.
+    """
+    # Find nearest edge (road segment)
+    nearest_edge = ox.nearest_edges(G, lng, lat, return_dist=True)
+
+    if len(nearest_edge) == 2:
+        edge_info, distance = nearest_edge
+        u, v, key = edge_info
+
+        # Get the edge geometry
+        edge_data = G.edges[u, v, key]
+
+        if 'geometry' in edge_data:
+            # Use the edge geometry
+            road_geom = edge_data['geometry']
+
+            from shapely.geometry import Point
+            from shapely.ops import nearest_points
+
+            target_point = Point(lng, lat)
+            nearest_point_on_road = nearest_points(target_point, road_geom)[1]
+
+            return (nearest_point_on_road.y, nearest_point_on_road.x)
+        else:
+            # If no geometry, interpolate between nodes
+            u_node = G.nodes[u]
+            v_node = G.nodes[v]
+
+            # For simplicity, return the closer node
+            from geopy.distance import geodesic
+
+            dist_to_u = geodesic((lat, lng), (u_node['y'], u_node['x'])).meters
+            dist_to_v = geodesic((lat, lng), (v_node['y'], v_node['x'])).meters
+
+            if dist_to_u < dist_to_v:
+                return (u_node['y'], u_node['x'])
+            else:
+                return (v_node['y'], v_node['x'])
+    else:
+        # Fallback to nearest node
+        nearest_node = ox.nearest_nodes(G, lng, lat)
+        node_data = G.nodes[nearest_node]
+        return (node_data['y'], node_data['x'])
+
+
+# Updated main function using offline approach
+async def add_random_data():
+    """
+    Add random data using offline road snapping - much faster and more reliable.
+    """
     with SessionLocal() as db:
         data = [
             {
-                'origin': [35.9700692, 50.7306363],
-                'dest': [35.9934509, 50.7471121]
-            },
-            {
-                'origin': [35.9784854, 50.7088399],
-                'dest': [35.9609244, 50.6780187]
+                'origin': [35.97897, 50.73145],
+                'dest': [35.962546, 50.678285]
             }
         ]
 
         user_id_start = 10000
-
         cnt = 0
+
+        # Process all points - snaps to actual road edges, not just intersections
         for item in data:
-            origin_random = get_random_location_in_circle(
+            origin_random = await get_random_location_in_circle_offline_precise(
                 item['origin'][0], item['origin'][1])
-            dest_random = get_random_location_in_circle(
+            dest_random = await get_random_location_in_circle_offline_precise(
                 item['dest'][0], item['dest'][1])
 
             for i in range(len(dest_random)):
                 location_history = create_location(
                     db=db,
-                    user_id=user_id_start+cnt,
+                    user_id=user_id_start + cnt,
                     origin_lat=origin_random[i][0],
                     origin_lng=origin_random[i][1],
                     destination_lat=dest_random[i][0],
