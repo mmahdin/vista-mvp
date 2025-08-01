@@ -824,7 +824,7 @@ class GroupManager {
         this.progressInterval = null;
     }
 
-    async requestRide() {
+    async requestGroup() {
         const markers = this.mapManager.getMarkers();
         
         if (!markers.origin || !markers.destination) {
@@ -854,7 +854,7 @@ class GroupManager {
         } catch (error) {
             console.error('Failed to request ride or save location:', error);
             this.notificationManager.show('Failed to request ride. Please try again.', false);
-            this.grouptBtn.innerHTML = '<i class="fas fa-car"></i> Request Ride';
+            this.grouptBtn.innerHTML = '<i class="fas fa-car"></i> Find Companions';
             this.grouptBtn.disabled = false;
         }
     }
@@ -887,7 +887,7 @@ class GroupManager {
 
         // Reset UI
         this.grouptBtn.style.display = 'flex';
-        this.grouptBtn.innerHTML = '<i class="fas fa-car"></i> Request Ride';
+        this.grouptBtn.innerHTML = '<i class="fas fa-car"></i> Find Companions';
         this.grouptBtn.disabled = false;
         this.cancelBtn.style.display = 'none';
         this.rideStatus.style.display = 'none';
@@ -903,9 +903,7 @@ class GroupManager {
         const start = originMarker.getLatLng();
         const end = destinationMarker.getLatLng();
 
-        // Assuming 'userData' is globally available or passed to the class
-        // Make sure userData.id is defined, or replace with a static ID for testing
-        const userId = typeof userData !== 'undefined' && userData.id ? userData.id : 1; // Default to 1 if userData.id is not available
+        const userId = typeof userData !== 'undefined' && userData.id ? userData.id : 1;
 
         const locationData = {
             user_id: userId,
@@ -1011,7 +1009,7 @@ class RideApp {
         });
 
         document.getElementById('group-btn').addEventListener('click', () => {
-            this.rideManager.requestRide();
+            this.rideManager.requestGroup();
         });
 
         document.getElementById('cancel-btn').addEventListener('click', () => {

@@ -104,6 +104,7 @@ async def save_location_history(
 
         # Get locations and calculate groups
         df_locations = get_all_locations_as_dataframe(db)
+        print(df_locations)
         meeting_points, groups = get_od_meeting_points(
             df_locations,
             group_size=3,
