@@ -8,9 +8,26 @@ from app.config import settings
 from sqlalchemy.orm import Session
 from app.database.crud import get_user_by_email, create_user
 from contextlib import asynccontextmanager
+from app.routes.clustering_service import (
+    get_clustering_service, 
+    start_clustering_service, 
+    stop_clustering_service,
+    ClusteringService
+)
 
 
-app = FastAPI(title="ViSta", debug=settings.DEBUG)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db = SessionLocal()
+    try:
+        start_clustering_service()
+        clustering_service = get_clustering_service()
+        yield
+    finally:
+        stop_clustering_service()
+        db.close()
+
+app = FastAPI(title="ViSta",  lifespan=lifespan, debug=settings.DEBUG)
 
 # Setup database
 Base.metadata.create_all(bind=engine)
@@ -35,20 +52,7 @@ app.include_router(schedule.router)
 app.include_router(history.router)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    db = SessionLocal()
-    try:
-        if not get_user_by_email(db, "admin@example.com"):
-            create_user(
-                db,
-                email="admin@example.com",
-                password="securepassword",
-                full_name="Admin User"
-            )
-        yield
-    finally:
-        db.close()
+
 
 
 @app.get("/health")

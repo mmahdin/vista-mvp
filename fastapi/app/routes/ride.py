@@ -12,6 +12,13 @@ from datetime import datetime, timezone
 from .utils import get_od_meeting_points
 from .utils import add_random_data
 
+from app.routes.clustering_service import (
+    get_clustering_service, 
+    start_clustering_service, 
+    stop_clustering_service,
+    ClusteringService
+)
+
 router = APIRouter()
 
 
@@ -102,9 +109,15 @@ async def save_location_history(
             destination_lng=location_data.destination_lng
         )
 
+        clustering_service = get_clustering_service()
+        data = clustering_service.get_user_companions(user.id)
+        print(f'companions: {data}')
+        print(f'get_service_status: {clustering_service.get_service_status()}')
+        print(f'get_all_active_groups: {clustering_service.get_all_active_groups()}')
+        print('****************************************')
+
         # Get locations and calculate groups
         df_locations = get_all_locations_as_dataframe(db)
-        print(df_locations)
         meeting_points, groups = get_od_meeting_points(
             df_locations,
             group_size=3,
