@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import queue
 import time
 from sklearn.neighbors import BallTree
+import pickle
 
 from app.database import get_db, SessionLocal
 from app.database.models import *
@@ -24,13 +25,6 @@ from app.database.models import *
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Precompute the OSM graph for the entire area
-PLACE = "Savojbolagh County, Alborz Province, Iran"
-GLOBAL_GRAPH = ox.graph_from_place(PLACE, network_type='walk', simplify=True)
-NODE_COORDS = np.array([(data['y'], data['x']) for node, data in GLOBAL_GRAPH.nodes(data=True)])
-NODE_COORDS_RAD = np.radians(NODE_COORDS)
-NODE_TREE = BallTree(NODE_COORDS_RAD, metric='haversine')
 
 
 @dataclass
@@ -91,7 +85,239 @@ class ClusterGroup:
         }
 
 
+@dataclass
+class User:
+    id: str
+    origin_lat: float
+    origin_lon: float
+    dest_lat: float
+    dest_lon: float
 
+@dataclass
+class Bucket:
+    id: int
+    center_lat: float
+    center_lon: float
+    node_count: int
+    nodes: List[int]
+    bbox: Tuple[float, float, float, float] 
+
+
+class FastBucketAssigner:
+    def __init__(self, buckets: List[Bucket]):
+        self.buckets = buckets
+        self.num_buckets = len(buckets)
+        
+        # Create spatial index for fast lookup
+        self.bucket_ids = np.array([b.id for b in buckets])
+        self.min_lats = np.array([b.bbox[0] for b in buckets])
+        self.min_lons = np.array([b.bbox[1] for b in buckets])
+        self.max_lats = np.array([b.bbox[2] for b in buckets])
+        self.max_lons = np.array([b.bbox[3] for b in buckets])
+        
+        # Create a mapping from bucket_id to index for quick lookup
+        self.bucket_id_to_index = {bucket.id: i for i, bucket in enumerate(buckets)}
+    
+    def find_bucket_for_point(self, lat: float, lon: float) -> int:
+        """Find which bucket a point (lat, lon) belongs to. Returns bucket_id or -1 if not found."""
+        inside_mask = (
+            (self.min_lats <= lat) & (lat <= self.max_lats) &
+            (self.min_lons <= lon) & (lon <= self.max_lons)
+        )
+        
+        indices = np.where(inside_mask)[0]
+        if len(indices) > 0:
+            return self.bucket_ids[indices[0]]
+        return -1
+    
+    def assign_users_to_od_buckets(self, users: List[UserLocation]) -> Dict[Tuple[int, int], List[UserLocation]]:
+        """Assign users to origin-destination bucket pairs."""
+        od_buckets = defaultdict(list)
+        
+        for user in users:
+            origin_bucket = self.find_bucket_for_point(user.origin_lat, user.origin_lng)
+            dest_bucket = self.find_bucket_for_point(user.destination_lat, user.destination_lng)
+            
+            if origin_bucket != -1 and dest_bucket != -1:
+                od_buckets[(origin_bucket, dest_bucket)].append(user)
+        
+        return dict(od_buckets)
+
+
+class EfficientRideShareClusterer:
+    """Efficient ride share clustering using spatial buckets"""
+    
+    def __init__(self, 
+                 buckets_file_path: str = '/home/mahdi/Documents/startup/carpooling/v3/vista-mvp/fastapi/buckets2_data.pkl',
+                 min_group_size: int = 2, 
+                 max_group_size: int = 8):
+        """
+        Initialize the clusterer with bucket data
+        
+        Args:
+            buckets_file_path: Path to the pickle file containing bucket data
+            min_group_size: Minimum number of users required to form a group
+            max_group_size: Maximum number of users allowed in a group
+        """
+        self.buckets_file_path = buckets_file_path
+        self.min_group_size = min_group_size
+        self.max_group_size = max_group_size
+        
+        # Load buckets
+        self._load_buckets()
+        
+        # Initialize bucket assigner
+        self.bucket_assigner = FastBucketAssigner(self.kmeans_buckets)
+        
+        logger.info(f"EfficientRideShareClusterer initialized with {len(self.kmeans_buckets)} buckets")
+    
+    def _load_buckets(self):
+        """Load bucket data from pickle file"""
+        try:
+            with open(self.buckets_file_path, "rb") as f:
+                buckets_data = pickle.load(f)
+            self.kmeans_buckets = [Bucket(**b) for b in buckets_data]
+            logger.info(f"Successfully loaded {len(self.kmeans_buckets)} buckets from {self.buckets_file_path}")
+        except FileNotFoundError:
+            logger.error(f"Bucket file not found: {self.buckets_file_path}")
+            raise
+        except Exception as e:
+            logger.error(f"Error loading bucket file: {e}")
+            raise
+    
+    def cluster_users(self, available_users: List[UserLocation]) -> Dict[str, ClusterGroup]:
+        """
+        Main clustering function that groups users by origin-destination bucket pairs
+        
+        Args:
+            available_users: List of UserLocation objects to cluster
+            
+        Returns:
+            Dictionary mapping group_id to ClusterGroup objects
+        """
+        if not available_users:
+            logger.debug("No users provided for clustering")
+            return {}
+        
+        logger.debug(f"Clustering {len(available_users)} users")
+        
+        try:
+            # Assign users to origin-destination bucket pairs
+            od_assignments = self.bucket_assigner.assign_users_to_od_buckets(available_users)
+            cnt = 0
+            for key, value in od_assignments.items():
+                cnt += len(value)
+            print(cnt)           
+            print(value) 
+            # Create cluster groups
+            cluster_groups = {}
+            current_time = datetime.now()
+            
+            for (origin_bucket_id, dest_bucket_id), users in od_assignments.items():
+                # Only create groups that meet minimum size requirement
+                if len(users) >= self.min_group_size:
+                    # Split large groups if they exceed max_group_size
+                    user_chunks = self._split_users_into_chunks(users, self.max_group_size)
+                    
+                    for i, chunk in enumerate(user_chunks):
+                        if len(chunk) >= self.min_group_size:  # Ensure chunks still meet minimum size
+                            group_id = f"group_{origin_bucket_id}_{dest_bucket_id}_{i}"
+                            
+                            cluster_group = ClusterGroup(
+                                group_id=group_id,
+                                users=chunk,
+                                created_at=current_time,
+                                status='forming'
+                            )
+                            
+                            cluster_groups[group_id] = cluster_group
+            
+            # Log clustering statistics
+            total_grouped_users = sum(len(group.users) for group in cluster_groups.values())
+            ungrouped_users = len(available_users) - total_grouped_users
+            
+            logger.info(f"Clustering complete: {len(cluster_groups)} groups created, "
+                       f"{total_grouped_users} users grouped, {ungrouped_users} users ungrouped")
+            
+            return cluster_groups
+            
+        except Exception as e:
+            logger.error(f"Error during clustering: {e}")
+            return {}
+    
+    def _split_users_into_chunks(self, users: List[UserLocation], max_chunk_size: int) -> List[List[UserLocation]]:
+        """Split a list of users into chunks of maximum size"""
+        chunks = []
+        for i in range(0, len(users), max_chunk_size):
+            chunks.append(users[i:i + max_chunk_size])
+        return chunks
+    
+    def get_clustering_statistics(self, available_users: List[UserLocation]) -> Dict:
+        """
+        Get detailed statistics about the clustering results
+        
+        Args:
+            available_users: List of UserLocation objects
+            
+        Returns:
+            Dictionary containing clustering statistics
+        """
+        if not available_users:
+            return {
+                'total_users': 0,
+                'assigned_users': 0,
+                'unassigned_users': 0,
+                'unique_od_pairs': 0,
+                'potential_groups': 0,
+                'od_pair_details': []
+            }
+        
+        od_assignments = self.bucket_assigner.assign_users_to_od_buckets(available_users)
+        
+        total_assigned = sum(len(user_list) for user_list in od_assignments.values())
+        potential_groups = sum(1 for user_list in od_assignments.values() if len(user_list) >= self.min_group_size)
+        
+        od_pair_details = [
+            {
+                'origin_bucket': origin_bucket,
+                'dest_bucket': dest_bucket,
+                'user_count': len(user_list),
+                'can_form_group': len(user_list) >= self.min_group_size,
+                'user_ids': [u.user_id for u in user_list]
+            }
+            for (origin_bucket, dest_bucket), user_list in od_assignments.items()
+        ]
+        
+        return {
+            'total_users': len(available_users),
+            'assigned_users': total_assigned,
+            'unassigned_users': len(available_users) - total_assigned,
+            'unique_od_pairs': len(od_assignments),
+            'potential_groups': potential_groups,
+            'od_pair_details': od_pair_details
+        }
+    
+    def find_user_bucket_assignment(self, user: UserLocation) -> Tuple[int, int]:
+        """
+        Find the origin and destination bucket IDs for a specific user
+        
+        Args:
+            user: UserLocation object
+            
+        Returns:
+            Tuple of (origin_bucket_id, dest_bucket_id) or (-1, -1) if not found
+        """
+        origin_bucket = self.bucket_assigner.find_bucket_for_point(user.origin_lat, user.origin_lng)
+        dest_bucket = self.bucket_assigner.find_bucket_for_point(user.destination_lat, user.destination_lng)
+        
+        return (origin_bucket, dest_bucket)
+    
+    def reload_buckets(self):
+        """Reload bucket data from file (useful for dynamic updates)"""
+        logger.info("Reloading bucket data...")
+        self._load_buckets()
+        self.bucket_assigner = FastBucketAssigner(self.kmeans_buckets)
+        logger.info("Bucket data reloaded successfully")
 
 
 class ClusteringService:
