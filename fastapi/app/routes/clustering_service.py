@@ -16,6 +16,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 import queue
 import time
+from sklearn.neighbors import BallTree
 
 from app.database import get_db, SessionLocal
 from app.database.models import *
@@ -23,6 +24,13 @@ from app.database.models import *
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Precompute the OSM graph for the entire area
+PLACE = "Savojbolagh County, Alborz Province, Iran"
+GLOBAL_GRAPH = ox.graph_from_place(PLACE, network_type='walk', simplify=True)
+NODE_COORDS = np.array([(data['y'], data['x']) for node, data in GLOBAL_GRAPH.nodes(data=True)])
+NODE_COORDS_RAD = np.radians(NODE_COORDS)
+NODE_TREE = BallTree(NODE_COORDS_RAD, metric='haversine')
 
 
 @dataclass
@@ -83,240 +91,7 @@ class ClusterGroup:
         }
 
 
-class OSMDistanceCalculator:
-    """Thread-safe distance calculator using OSM data"""
 
-    def __init__(self, cache_size: int = 1000):
-        self.graph_cache = {}
-        self.distance_cache = {}
-        self.cache_size = cache_size
-        self._lock = threading.RLock()
-
-    def _get_or_create_graph(self, center_lat: float, center_lng: float, radius: int = 2000) -> Optional[nx.Graph]:
-        """Thread-safe graph creation and caching"""
-        cache_key = f"{center_lat:.4f},{center_lng:.4f},{radius}"
-
-        with self._lock:
-            if cache_key in self.graph_cache:
-                return self.graph_cache[cache_key]
-
-        try:
-            # Download walking network around the center point
-            G = ox.graph_from_point(
-                (center_lat, center_lng),
-                dist=radius,
-                network_type='walk',
-                simplify=True
-            )
-            
-            with self._lock:
-                self.graph_cache[cache_key] = G
-                # Limit cache size
-                if len(self.graph_cache) > self.cache_size:
-                    oldest_key = next(iter(self.graph_cache))
-                    del self.graph_cache[oldest_key]
-
-            return G
-
-        except Exception as e:
-            logger.warning(f"Failed to get OSM graph: {e}")
-            return None
-
-    def calculate_walking_distance(self, point1: Tuple[float, float], point2: Tuple[float, float]) -> Optional[float]:
-        """Thread-safe walking distance calculation"""
-        cache_key = f"{point1[0]:.6f},{point1[1]:.6f}-{point2[0]:.6f},{point2[1]:.6f}"
-
-        with self._lock:
-            if cache_key in self.distance_cache:
-                return self.distance_cache[cache_key]
-
-        # Use geodesic distance as fallback if points are very close
-        geodesic_dist = geodesic(point1, point2).meters
-        if geodesic_dist < 50:  # Less than 50 meters
-            with self._lock:
-                self.distance_cache[cache_key] = geodesic_dist
-            return geodesic_dist
-
-        try:
-            # Get center point for graph
-            center_lat = (point1[0] + point2[0]) / 2
-            center_lng = (point1[1] + point2[1]) / 2
-
-            G = self._get_or_create_graph(center_lat, center_lng)
-            if G is None:
-                with self._lock:
-                    self.distance_cache[cache_key] = geodesic_dist
-                return geodesic_dist
-
-            # Find nearest nodes and calculate shortest path
-            node1 = ox.distance.nearest_nodes(G, point1[1], point1[0])
-            node2 = ox.distance.nearest_nodes(G, point2[1], point2[0])
-
-            try:
-                path_length = nx.shortest_path_length(G, node1, node2, weight='length')
-                
-                with self._lock:
-                    self.distance_cache[cache_key] = path_length
-                    # Limit cache size
-                    if len(self.distance_cache) > self.cache_size:
-                        oldest_key = next(iter(self.distance_cache))
-                        del self.distance_cache[oldest_key]
-
-                return path_length
-            except nx.NetworkXNoPath:
-                with self._lock:
-                    self.distance_cache[cache_key] = geodesic_dist
-                return geodesic_dist
-
-        except Exception as e:
-            logger.warning(f"Error calculating walking distance: {e}")
-            with self._lock:
-                self.distance_cache[cache_key] = geodesic_dist
-            return geodesic_dist
-
-
-class RideShareClusterer:
-    """Clustering algorithm for ride sharing"""
-
-    def __init__(self, max_walking_distance: float = 500.0):
-        self.max_walking_distance = max_walking_distance
-        self.distance_calculator = OSMDistanceCalculator()
-
-    def _calculate_meeting_points(self, users: List[UserLocation]) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
-        """Calculate optimal meeting points for origin and destination"""
-        if not users:
-            return None, None
-
-        # Calculate centroid for origin points
-        origin_lats = [u.origin_lat for u in users]
-        origin_lngs = [u.origin_lng for u in users]
-        origin_meeting = (
-            sum(origin_lats) / len(origin_lats),
-            sum(origin_lngs) / len(origin_lngs)
-        )
-
-        # Calculate centroid for destination points
-        dest_lats = [u.destination_lat for u in users]
-        dest_lngs = [u.destination_lng for u in users]
-        dest_meeting = (
-            sum(dest_lats) / len(dest_lats),
-            sum(dest_lngs) / len(dest_lngs)
-        )
-
-        return origin_meeting, dest_meeting
-
-    def _calculate_compatibility_score(self, user1: UserLocation, user2: UserLocation) -> float:
-        """Calculate compatibility score between two users"""
-        try:
-            # Calculate walking distances
-            origin_distance = self.distance_calculator.calculate_walking_distance(
-                user1.origin_coords, user2.origin_coords
-            )
-            destination_distance = self.distance_calculator.calculate_walking_distance(
-                user1.destination_coords, user2.destination_coords
-            )
-
-            if origin_distance is None or destination_distance is None:
-                return float('inf')
-
-            # Check if within walking distance threshold
-            if origin_distance > self.max_walking_distance or destination_distance > self.max_walking_distance:
-                return float('inf')
-
-            # Calculate combined score (lower is better)
-            score = (origin_distance * 0.6) + (destination_distance * 0.4)
-
-            # Add time penalty if requests are far apart in time
-            time_diff = abs((user1.stored_at - user2.stored_at).total_seconds())
-            time_penalty = min(time_diff / 300, 100)
-
-            return score + time_penalty
-
-        except Exception as e:
-            logger.error(f"Error calculating compatibility: {e}")
-            return float('inf')
-
-    def _find_best_third_user(self, user1: UserLocation, user2: UserLocation,
-                              candidates: List[UserLocation]) -> Optional[UserLocation]:
-        """Find the best third user to complete a group"""
-        best_user = None
-        best_score = float('inf')
-
-        for candidate in candidates:
-            if candidate.user_id in [user1.user_id, user2.user_id]:
-                continue
-
-            # Calculate scores with both existing users
-            score1 = self._calculate_compatibility_score(user1, candidate)
-            score2 = self._calculate_compatibility_score(user2, candidate)
-
-            if score1 == float('inf') or score2 == float('inf'):
-                continue
-
-            # Combined score (average)
-            combined_score = (score1 + score2) / 2
-
-            if combined_score < best_score:
-                best_score = combined_score
-                best_user = candidate
-
-        return best_user
-
-    def cluster_users(self, users: List[UserLocation]) -> List[ClusterGroup]:
-        """Main clustering algorithm"""
-        if len(users) < 3:
-            return []
-
-        groups = []
-        used_users = set()
-
-        # Sort users by timestamp to prioritize earlier requests
-        sorted_users = sorted(users, key=lambda u: u.stored_at)
-
-        for i, user1 in enumerate(sorted_users):
-            if user1.user_id in used_users:
-                continue
-
-            best_pair = None
-            best_pair_score = float('inf')
-
-            # Find best compatible user
-            for j, user2 in enumerate(sorted_users[i+1:], i+1):
-                if user2.user_id in used_users:
-                    continue
-
-                score = self._calculate_compatibility_score(user1, user2)
-                if score < best_pair_score:
-                    best_pair_score = score
-                    best_pair = user2
-
-            if best_pair is None or best_pair_score == float('inf'):
-                continue
-
-            # Find third user
-            remaining_users = [u for u in sorted_users if u.user_id not in used_users]
-            third_user = self._find_best_third_user(user1, best_pair, remaining_users)
-
-            if third_user is not None:
-                # Create group
-                group_users = [user1, best_pair, third_user]
-                origin_meeting, dest_meeting = self._calculate_meeting_points(group_users)
-                
-                group = ClusterGroup(
-                    group_id=f"group_{user1.user_id}_{best_pair.user_id}_{third_user.user_id}_{int(time.time())}",
-                    users=group_users,
-                    created_at=datetime.now(timezone.utc),
-                    meeting_point_origin=origin_meeting,
-                    meeting_point_destination=dest_meeting,
-                    status="complete"
-                )
-                groups.append(group)
-
-                # Mark users as used
-                used_users.update([user1.user_id, best_pair.user_id, third_user.user_id])
-                print(groups)
-
-        return groups
 
 
 class ClusteringService:
@@ -325,7 +100,8 @@ class ClusteringService:
     def __init__(self, clustering_interval: int = 30, max_wait_time: int = 300):
         self.clustering_interval = clustering_interval
         self.max_wait_time = max_wait_time
-        self.clusterer = RideShareClusterer()
+        # i need this class
+        self.clusterer = EfficientRideShareClusterer()
         
         # Thread-safe data structures
         self._lock = threading.RLock()
