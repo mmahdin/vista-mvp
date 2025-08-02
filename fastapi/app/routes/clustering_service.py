@@ -22,6 +22,11 @@ import pickle
 from app.database import get_db, SessionLocal
 from app.database.models import *
 
+
+place = "Savojbolagh County, Alborz Province, Iran"
+G = ox.graph_from_place(place, network_type='walk')
+
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,6 +98,7 @@ class User:
     dest_lat: float
     dest_lon: float
 
+
 @dataclass
 class Bucket:
     id: int
@@ -117,9 +123,24 @@ class FastBucketAssigner:
         
         # Create a mapping from bucket_id to index for quick lookup
         self.bucket_id_to_index = {bucket.id: i for i, bucket in enumerate(buckets)}
-    
+
+    def get_nearest_node(self, lat, lon):
+        """
+        Given latitude and longitude, return the (lat, lon) of the nearest node in the graph G.
+        """
+        # Find the nearest node ID
+        nearest_node = ox.distance.nearest_nodes(G, X=lon, Y=lat)
+        
+        # Extract node coordinates
+        node_lat = G.nodes[nearest_node]['y']
+        node_lon = G.nodes[nearest_node]['x']
+        
+        return node_lat, node_lon
+        
     def find_bucket_for_point(self, lat: float, lon: float) -> int:
         """Find which bucket a point (lat, lon) belongs to. Returns bucket_id or -1 if not found."""
+        lat, lon = self.get_nearest_node(lat, lon)
+
         inside_mask = (
             (self.min_lats <= lat) & (lat <= self.max_lats) &
             (self.min_lons <= lon) & (lon <= self.max_lons)
@@ -207,8 +228,7 @@ class EfficientRideShareClusterer:
             cnt = 0
             for key, value in od_assignments.items():
                 cnt += len(value)
-            print(cnt)           
-            print(value) 
+
             # Create cluster groups
             cluster_groups = {}
             current_time = datetime.now()
