@@ -169,7 +169,7 @@ class EfficientRideShareClusterer:
     """Efficient ride share clustering using spatial buckets"""
     
     def __init__(self, 
-                 buckets_file_path: str = '/home/mahdi/Documents/startup/carpooling/v3/vista-mvp/fastapi/buckets2_data.pkl',
+                 buckets_file_path: str = '/home/mahdi/Documents/startup/carpooling/v3/vista-mvp/fastapi/buckets1_data.pkl',
                  min_group_size: int = 2, 
                  max_group_size: int = 8):
         """
