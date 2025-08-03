@@ -286,8 +286,113 @@ class FastBucketAssigner:
         return dict(od_buckets)
 
 
+========================================================================================================================================================================================================================
+
+In this project, my goal is to create a feature matrix for a set of users, each with an origin and a destination location. The spatial scope of this project is limited to a graph extracted from OpenStreetMap, and it is assumed that all possible locations are defined solely within this graph.
+
+place = "Savojbolagh County, Alborz Province, Iran"
+G = ox.graph_from_place(place, network_type='walk')
+
+The overall structure of the matrix is designed to calculate similarity between users based on their origin and destination locations using the Maximum Inner Product Search (MIPS) method.
+
+To build this matrix, I first identify the graph's nodes and assume that each node has two distinct roles: one as an origin and another as a destination. Therefore, for a graph with *n* nodes, the final matrix will have *2n* columns; half of the columns are dedicated to origin features, and the other half to destination features.
+
+To populate the matrix, each row corresponds to a user. First, I take the user's origin location and find the 10 closest nodes to it based on walking distance. These distances are then normalized and placed in the columns corresponding to the "origin role" of those nodes in the user's row. The same process is repeated for the destination location: the 10 closest nodes to the destination are selected, their distances are normalized, and they are entered into the columns related to the "destination role" of those nodes.
+
+This bipartite matrix structure (separating origin and destination) offers several key advantages. First, it ensures that only similarities of the type "same origin" or "same destination" are calculated. In contrast, if a user's origin is close to another user's destination, these features are placed in separate columns, so their inner product is not affected. This prevents false similarities and ensures that only valid spatial proximity between users is considered as true similarity.
+
+Finally, after constructing this sparse matrix, I use the Maximum Inner Product Search algorithm to find users with more similar origins and destinations for each user.
+
+please write the functions (or class) that gets the input as a list of UserLocation like:
+UserLocation(user_id=1, origin_lat=35.9725713, origin_lng=50.7328994, destination_lat=35.9591762, destination_lng=50.6883034, stored_at=datetime.datetime(2025, 8, 1, 22, 6, 31, 467604))
+which UserLocation is:
+@dataclass
+class UserLocation:
+    user_id: int
+    origin_lat: float
+    origin_lng: float
+    destination_lat: float
+    destination_lng: float
+    stored_at: datetime
+
+    @property
+    def origin_coords(self) -> Tuple[float, float]:
+        return (self.origin_lat, self.origin_lng)
+
+    @property
+    def destination_coords(self) -> Tuple[float, float]:
+        return (self.destination_lat, self.destination_lng)
+
+    def to_dict(self) -> Dict:
+        return {
+            'user_id': self.user_id,
+            'origin_lat': self.origin_lat,
+            'origin_lng': self.origin_lng,
+            'destination_lat': self.destination_lat,
+            'destination_lng': self.destination_lng,
+            'stored_at': self.stored_at.isoformat()
+        }
+        
+        
+and return the ouput (list of group) like:
+groups = []
+@dataclass
+class ClusterGroup:
+    group_id: str
+    users: List[UserLocation]
+    created_at: datetime
+    meeting_point_origin: Optional[Tuple[float, float]] = None
+    meeting_point_destination: Optional[Tuple[float, float]] = None
+    status: str = "forming"  # forming, complete, expired
+    def is_complete(self) -> bool:
+        return len(self.users) == 3
+    def has_user(self, user_id: int) -> bool:
+        return any(u.user_id == user_id for u in self.users)
+    def get_user_ids(self) -> List[int]:
+        return [u.user_id for u in self.users]
+    def to_dict(self) -> Dict:
+        return {
+            'group_id': self.group_id,
+            'users': [user.to_dict() for user in self.users],
+            'created_at': self.created_at.isoformat(),
+            'meeting_point_origin': self.meeting_point_origin,
+            'meeting_point_destination': self.meeting_point_destination,
+            'status': self.status,
+            'user_count': len(self.users)
+        }
+group = ClusterGroup(
+group_id=f"group_{user1.user_id}_{best_pair.user_id}_{third_user.user_id}_{int(time.time())}",
+users=group_users,
+created_at=datetime.now(timezone.utc),
+meeting_point_origin=origin_meeting,
+meeting_point_destination=dest_meeting,
+status="complete"
+)
+groups.append(group)
+
+The output groups are limited to a maximum of 3 people but with the threshold similarity (if pass the threshold for the similarity).
+Some notes:
+To optimize and speed up the process, use precomputation where possible.
+For example, if you need the walking distance between nodes, precompute the distances between 200 nearest nodes of each node and use those values at runtime.
+Similarly, if you need to find the 10 nearest nodes based on walking distance, compute and store that information in advance.
+Apply this approach to any other tasks that can be precomputed.
+
+please write the python code.
 
 
 
-شششت
+
+
+how can i speed up this process:
+self.G = ox.graph_from_place(self.place, network_type='walk')
+nearest_node = ox.distance.nearest_nodes(self.G, lng, lat)
+
+i don't want to harm my precesion considerebly.
+
+
+
+
+
+
+
 

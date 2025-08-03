@@ -39,7 +39,7 @@ async def ride_page(
     request: Request,
     user=Depends(protected_route)
 ):
-    # await add_random_data()
+    await add_random_data()
 
     user_response = UserResponse.model_validate(user)
     return templates.TemplateResponse("ride.html", {

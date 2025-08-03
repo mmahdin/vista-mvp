@@ -405,23 +405,46 @@ async def add_random_data():
             }
         ]
 
+        origin_points = [
+            {'lat': 35.97343762887419, 'lng': 50.733369466165854},
+            {'lat': 35.971899682275826, 'lng': 50.73203615202348},
+            {'lat': 35.97300620759051, 'lng': 50.73229376277865},
+            {'lat': 35.972430973236975, 'lng': 50.730351278776325}
+        ]
+        dest_points = [
+            {'lat': 35.96060642151597, 'lng': 50.67944970979732},
+            {'lat': 35.96041031396881, 'lng': 50.67980983794394},
+            {'lat': 35.96129782317813, 'lng': 50.68118268477208},
+            {'lat': 35.960023756506935, 'lng': 50.68022228130509}
+        ]
         user_id_start = 10000
         cnt = 0
 
         # Process all points - snaps to actual road edges, not just intersections
         for item in data:
-            origin_random = await get_random_location_in_circle_offline_precise(
-                item['origin'][0], item['origin'][1])
-            dest_random = await get_random_location_in_circle_offline_precise(
-                item['dest'][0], item['dest'][1])
+            # origin_random = await get_random_location_in_circle_offline_precise(
+            #     item['origin'][0], item['origin'][1])
+            # dest_random = await get_random_location_in_circle_offline_precise(
+            #     item['dest'][0], item['dest'][1])
 
-            for i in range(len(dest_random)):
-                location_history = create_location(
+            for i in range(150):
+                # location_history = create_location(
+                #     db=db,
+                #     user_id=user_id_start + cnt,
+                #     origin_lat=origin_random[i][0],
+                #     origin_lng=origin_random[i][1],
+                #     destination_lat=dest_random[i][0],
+                #     destination_lng=dest_random[i][1]
+                # )
+                cnt += 1
+        
+        for i in range(len(origin_points)):
+            location_history = create_location(
                     db=db,
                     user_id=user_id_start + cnt,
-                    origin_lat=origin_random[i][0],
-                    origin_lng=origin_random[i][1],
-                    destination_lat=dest_random[i][0],
-                    destination_lng=dest_random[i][1]
+                    origin_lat=origin_points[i]['lat'],
+                    origin_lng=origin_points[i]['lng'],
+                    destination_lat=dest_points[i]['lat'],
+                    destination_lng=dest_points[i]['lng']
                 )
-                cnt += 1
+            cnt += 1

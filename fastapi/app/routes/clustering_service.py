@@ -25,6 +25,7 @@ from sklearn.preprocessing import normalize
 from scipy.sparse import csr_matrix, lil_matrix
 from sklearn.metrics.pairwise import linear_kernel
 from scipy.spatial import cKDTree
+from sklearn.metrics.pairwise import cosine_similarity
 
 from app.database import get_db, SessionLocal
 from app.database.models import *
@@ -97,402 +98,289 @@ class ClusterGroup:
         }
 
 
-class SpatialSimilarityMatcher:
-    def __init__(self, place: str = "Savojbolagh County, Alborz Province, Iran", 
-                 network_type: str = 'walk', k_neighbors: int = 10, 
-                 similarity_threshold: float = 0.3, precompute_neighbors: int = 200):
+class SpatialClusteringSystem:
+    def __init__(self, place: str = "Savojbolagh Central District, Savojbolagh County, Alborz Province, Iran", 
+                 k_nearest: int = 100, similarity_threshold: float = 0.3,
+                 cache_file: str = "spatial_cache.pkl"):
         """
-        Initialize the spatial similarity matcher.
+        Initialize the spatial clustering system.
         
         Args:
-            place: Location to extract graph from
-            network_type: Type of network to extract (walk, drive, etc.)
-            k_neighbors: Number of closest nodes to consider for each location
-            similarity_threshold: Minimum similarity score to form groups
-            precompute_neighbors: Number of nearest neighbors to precompute for each node
+            place: Location to extract graph from OSM
+            k_nearest: Number of nearest nodes to consider for each location
+            similarity_threshold: Minimum similarity threshold for clustering
+            cache_file: File to cache precomputed data
         """
         self.place = place
-        self.network_type = network_type
-        self.k_neighbors = k_neighbors
+        self.k_nearest = k_nearest
         self.similarity_threshold = similarity_threshold
-        self.precompute_neighbors = precompute_neighbors
+        self.cache_file = cache_file
+        
+        # Graph and precomputed data
         self.G = None
-        self.nodes_gdf = None
+        self.nodes_list = None
+        self.node_to_idx = None
+        self.nearest_nodes_cache = {}
+        self.distance_cache = {}
+        
+        # BallTree for fast nearest neighbor search
+        self.ball_tree = None
         self.node_coords = None
-        self.feature_matrix = None
-        self.user_locations = None
-        self.precomputed_distances = None  # Will store precomputed distances
-        self.node_to_index = None  # Mapping from node_id to index in arrays
         
-    def _load_graph(self):
-        """Load and prepare the OSM graph."""
-        print(f"Loading graph for {self.place}...")
-        self.G = ox.graph_from_place(self.place, network_type=self.network_type)
-        
-        # Convert nodes to GeoDataFrame for easier distance calculations
-        self.nodes_gdf = ox.graph_to_gdfs(self.G, edges=False)
-        
-        # Extract node coordinates as numpy array for efficient distance calculation
-        self.node_coords = np.array([[row.geometry.y, row.geometry.x] 
-                                   for _, row in self.nodes_gdf.iterrows()])
-        
-        # Create mapping from node_id to index
-        self.node_to_index = {node_id: idx for idx, node_id in enumerate(self.nodes_gdf.index)}
-        
-        print(f"Graph loaded with {len(self.nodes_gdf)} nodes")
+        # Initialize the system
+        self._load_or_compute_graph()
+        self._build_ball_tree()
+        self._load_or_compute_precomputed_data()
     
-    def _precompute_distances(self, save_filepath: str = None, load_filepath: str = None):
-        """
-        Precompute walking distances for each node to its nearest neighbors.
-        Can save results to file or load from existing file.
+    def _load_or_compute_graph(self):
+        """Load OSM graph for the specified place."""
+        print(f"Loading graph for {self.place}...")
+        self.G = ox.graph_from_place(self.place, network_type='walk')
+        self.nodes_list = list(self.G.nodes())
+        self.node_to_idx = {node: idx for idx, node in enumerate(self.nodes_list)}
+        print(f"Graph loaded with {len(self.nodes_list)} nodes")
+    
+    def _build_ball_tree(self):
+        """Build BallTree for fast nearest neighbor search."""
+        print("Building BallTree for fast nearest neighbor search...")
         
-        Args:
-            save_filepath: Path to save precomputed distances (optional)
-            load_filepath: Path to load precomputed distances from (optional)
-        """
-        # Try to load from file first if specified
-        if load_filepath:
-            print(f"Attempting to load precomputed distances from {load_filepath}...")
-            if self.load_precomputed_distances(load_filepath):
-                print("Successfully loaded precomputed distances!")
-                return
-            else:
-                print("Failed to load, will compute distances...")
+        # Extract coordinates for all nodes in radians (required for haversine distance)
+        self.node_coords = []
+        for node in self.nodes_list:
+            lat = np.radians(self.G.nodes[node]['y'])
+            lng = np.radians(self.G.nodes[node]['x'])
+            self.node_coords.append([lat, lng])
         
-        print(f"Precomputing distances for {self.precompute_neighbors} nearest neighbors per node...")
+        self.node_coords = np.array(self.node_coords)
         
-        n_nodes = len(self.nodes_gdf)
-        node_list = list(self.nodes_gdf.index)
+        # Build BallTree with haversine metric (great for geographic coordinates)
+        self.ball_tree = BallTree(self.node_coords, metric='haversine')
+        print("BallTree built successfully")
+    
+    def _load_or_compute_precomputed_data(self):
+        """Load precomputed data or compute if doesn't exist."""
+        try:
+            with open(self.cache_file, 'rb') as f:
+                cache_data = pickle.load(f)
+                self.nearest_nodes_cache = cache_data['nearest_nodes']
+                self.distance_cache = cache_data['distances']
+                print("Loaded precomputed data from cache")
+        except FileNotFoundError:
+            print("Cache not found. Computing precomputed data...")
+            self._precompute_data()
+            self._save_cache()
+    
+    def _precompute_data(self):
+        """Precompute nearest nodes and distances for optimization."""
+        print("Precomputing nearest nodes and distances...")
         
-        # Initialize storage for precomputed distances
-        # Format: dict[source_node] = [(neighbor_node_idx, distance), ...]
-        self.precomputed_distances = {}
-        
-        # Process each node
-        for i, source_node in enumerate(node_list):
+        # For each node, find 200 nearest nodes and their distances
+        for i, node in enumerate(self.nodes_list):
             if i % 100 == 0:
-                print(f"Precomputing distances for node {i+1}/{n_nodes}")
+                print(f"Processing node {i}/{len(self.nodes_list)}")
             
             try:
-                # Calculate distances from source node to all reachable nodes
-                distances_dict = nx.single_source_dijkstra_path_length(
-                    self.G, source_node, weight='length'
+                # Get distances to all other nodes (limited by network connectivity)
+                distances = nx.single_source_dijkstra_path_length(
+                    self.G, node, cutoff=5000, weight='length'  # 5km cutoff
                 )
                 
-                # Convert to list of (node_index, distance) pairs
-                distance_pairs = []
-                for target_node, distance in distances_dict.items():
-                    if target_node in self.node_to_index:
-                        target_idx = self.node_to_index[target_node]
-                        distance_pairs.append((target_idx, distance))
+                # Sort by distance and take top 200
+                sorted_distances = sorted(distances.items(), key=lambda x: x[1])[:200]
                 
-                # Sort by distance and keep only the closest neighbors
-                distance_pairs.sort(key=lambda x: x[1])
-                closest_neighbors = distance_pairs[:self.precompute_neighbors]
+                # Store nearest nodes
+                nearest_nodes = [(target_node, dist) for target_node, dist in sorted_distances]
+                self.nearest_nodes_cache[node] = nearest_nodes
                 
-                # Store in precomputed distances
-                source_idx = self.node_to_index[source_node]
-                self.precomputed_distances[source_idx] = closest_neighbors
+                # Store distance matrix for this node
+                self.distance_cache[node] = {target: dist for target, dist in sorted_distances}
                 
             except Exception as e:
-                print(f"Warning: Failed to compute distances for node {source_node}: {e}")
-                # Store empty list for problematic nodes
-                source_idx = self.node_to_index[source_node]
-                self.precomputed_distances[source_idx] = []
-        
-        print("Distance precomputation completed!")
-        
-        # Save to file if specified
-        if save_filepath:
-            print(f"Saving precomputed distances to {save_filepath}...")
-            self.save_precomputed_distances(save_filepath)
-            print("Precomputed distances saved successfully!")
+                print(f"Error processing node {node}: {e}")
+                # Fallback to Euclidean distance
+                node_coords = (self.G.nodes[node]['y'], self.G.nodes[node]['x'])
+                euclidean_distances = []
+                
+                for other_node in self.nodes_list:
+                    if other_node != node:
+                        other_coords = (self.G.nodes[other_node]['y'], self.G.nodes[other_node]['x'])
+                        dist = ox.distance.euclidean_dist_vec(
+                            node_coords[0], node_coords[1], 
+                            other_coords[0], other_coords[1]
+                        )
+                        euclidean_distances.append((other_node, dist))
+                
+                euclidean_distances.sort(key=lambda x: x[1])
+                self.nearest_nodes_cache[node] = euclidean_distances[:200]
+                self.distance_cache[node] = {target: dist for target, dist in euclidean_distances[:200]}
     
-    def save_precomputed_distances(self, filepath: str):
-        """Save precomputed distances to file for reuse."""
-        import pickle
-        
-        if self.precomputed_distances is None:
-            raise ValueError("No precomputed distances to save. Run _precompute_distances first.")
-        
-        save_data = {
-            'precomputed_distances': self.precomputed_distances,
-            'node_to_index': self.node_to_index,
-            'place': self.place,
-            'network_type': self.network_type,
-            'precompute_neighbors': self.precompute_neighbors
+    def _save_cache(self):
+        """Save precomputed data to cache file."""
+        cache_data = {
+            'nearest_nodes': self.nearest_nodes_cache,
+            'distances': self.distance_cache
         }
-        
-        with open(filepath, 'wb') as f:
-            pickle.dump(save_data, f)
-        
-        print(f"Precomputed distances saved to {filepath}")
+        with open(self.cache_file, 'wb') as f:
+            pickle.dump(cache_data, f)
+        print("Precomputed data saved to cache")
     
-    def load_precomputed_distances(self, filepath: str):
-        """Load precomputed distances from file."""
-        import pickle
+    def _find_k_nearest_nodes(self, coords: Tuple[float, float]) -> List[Tuple[int, float]]:
+        """Find k nearest nodes to given coordinates using BallTree."""
+        lat, lng = coords
         
-        try:
-            with open(filepath, 'rb') as f:
-                save_data = pickle.load(f)
+        # Convert coordinates to radians for BallTree query
+        query_point = np.array([[np.radians(lat), np.radians(lng)]])
+        
+        # Find nearest node using BallTree (much faster than ox.distance.nearest_nodes)
+        distances, indices = self.ball_tree.query(query_point, k=1)
+        nearest_node_idx = indices[0][0]
+        nearest_node = self.nodes_list[nearest_node_idx]
+        
+        # Get precomputed nearest nodes
+        if nearest_node in self.nearest_nodes_cache:
+            candidates = self.nearest_nodes_cache[nearest_node]
+        else:
+            # Fallback to BallTree for finding k nearest nodes directly
+            distances, indices = self.ball_tree.query(query_point, k=min(self.k_nearest, len(self.nodes_list)))
+            candidates = []
             
-            self.precomputed_distances = save_data['precomputed_distances']
-            self.node_to_index = save_data['node_to_index']
-            
-            # Verify compatibility
-            if (save_data['place'] != self.place or 
-                save_data['network_type'] != self.network_type):
-                print("Warning: Loaded precomputed distances may not match current graph settings")
-            
-            print(f"Precomputed distances loaded from {filepath}")
-            return True
-            
-        except Exception as e:
-            print(f"Failed to load precomputed distances: {e}")
-            return False
+            for i, idx in enumerate(indices[0]):
+                node = self.nodes_list[idx]
+                # Convert distance from radians back to meters (approximate)
+                dist_meters = distances[0][i] * 6371000  # Earth's radius in meters
+                candidates.append((node, dist_meters))
+        
+        # Return top k candidates
+        return candidates[:self.k_nearest]
     
-    def _find_closest_nodes(self, lat: float, lng: float, k: int = None) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Find k closest nodes to a given coordinate using precomputed walking distances.
+    def _normalize_distances(self, distances: List[float]) -> List[float]:
+        """Normalize distances using inverse distance weighting."""
+        if not distances:
+            return []
         
-        Args:
-            lat: Latitude
-            lng: Longitude
-            k: Number of closest nodes (defaults to self.k_neighbors)
-            
-        Returns:
-            Tuple of (node_indices, distances_in_meters)
-        """
-        if k is None:
-            k = self.k_neighbors
-        
-        # Find the nearest node to the point as starting point
-        nearest_node = ox.nearest_nodes(self.G, lng, lat)
-        nearest_node_idx = self.node_to_index.get(nearest_node)
-        
-        if nearest_node_idx is None:
-            print(f"Warning: Nearest node not found in index for point ({lat}, {lng})")
-            return self._fallback_euclidean_distance(lat, lng, k)
-        
-        # Get precomputed distances for the nearest node
-        if (self.precomputed_distances is None or 
-            nearest_node_idx not in self.precomputed_distances):
-            print(f"Warning: No precomputed distances for nearest node, using fallback")
-            return self._fallback_euclidean_distance(lat, lng, k)
-
-        precomputed_neighbors = self.precomputed_distances[nearest_node_idx]
-        
-        if len(precomputed_neighbors) == 0:
-            print(f"Warning: No precomputed neighbors for nearest node, using fallback")
-            return self._fallback_euclidean_distance(lat, lng, k)
-        
-        # Extract the k closest nodes from precomputed data
-        k_actual = min(k, len(precomputed_neighbors))
-        closest_k = precomputed_neighbors[:k_actual]
-        
-        # Separate indices and distances
-        closest_indices = np.array([pair[0] for pair in closest_k])
-        closest_distances = np.array([pair[1] for pair in closest_k])
-        
-        return closest_indices, closest_distances
-    
-    def _fallback_euclidean_distance(self, lat: float, lng: float, k: int) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Fallback method using Euclidean distance when precomputed distances are not available.
-        
-        Args:
-            lat: Latitude
-            lng: Longitude
-            k: Number of closest nodes
-            
-        Returns:
-            Tuple of (node_indices, distances_in_meters)
-        """
-        point = np.array([[lat, lng]])
-        euclidean_distances = cdist(point, self.node_coords, metric='euclidean')[0]
-        # Convert to approximate meters (rough conversion)
-        euclidean_distances = euclidean_distances * 111000  # degrees to meters approximation
-        
-        k_actual = min(k, len(euclidean_distances))
-        closest_indices = np.argpartition(euclidean_distances, k_actual)[:k_actual]
-        closest_distances = euclidean_distances[closest_indices]
-        
-        return closest_indices, closest_distances
-    
-    def _normalize_distances(self, distances: np.ndarray) -> np.ndarray:
-        """
-        Normalize distances using inverse distance weighting.
-        
-        Args:
-            distances: Array of distances in meters
-            
-        Returns:
-            Normalized weights
-        """
-        # Add small epsilon to avoid division by zero
-        epsilon = 1.0  # 1 meter epsilon for walking distances
-        weights = 1.0 / (distances + epsilon)
+        # Convert to similarities (inverse of distance + small epsilon)
+        epsilon = 1e-6
+        similarities = [1.0 / (d + epsilon) for d in distances]
         
         # Normalize to sum to 1
-        return weights / np.sum(weights)
+        total = sum(similarities)
+        if total > 0:
+            return [s / total for s in similarities]
+        else:
+            return [1.0 / len(similarities)] * len(similarities)
     
-    def build_feature_matrix(self, user_locations: List[UserLocation]) -> np.ndarray:
-        """
-        Build the bipartite feature matrix for all users.
-        
-        Args:
-            user_locations: List of user locations
-            
-        Returns:
-            Feature matrix of shape (n_users, 2*n_nodes)
-        """
-        if self.G is None:
-            self._load_graph()
-        
-        # Load or compute precomputed distances
-        if self.precomputed_distances is None:
-            # Create a filename based on place and settings
-            filename = '/home/mahdi/Documents/startup/carpooling/v3/vista-mvp/fastapi/prcmd.pkl'
-            print("Precomputed distances not found. Computing distances...")
-            self._precompute_distances(save_filepath=filename, load_filepath=filename)
-            
-        self.user_locations = user_locations
+    def _create_feature_matrix(self, user_locations: List[UserLocation]) -> np.ndarray:
+        """Create the bipartite feature matrix for users."""
+        n_nodes = len(self.nodes_list)
         n_users = len(user_locations)
-        n_nodes = len(self.nodes_gdf)
         
-        # Initialize feature matrix: n_users x (2*n_nodes)
-        # First n_nodes columns for origins, next n_nodes for destinations
-        feature_matrix = np.zeros((n_users, 2 * n_nodes))
+        # Matrix with 2n columns (n for origins, n for destinations)
+        matrix = np.zeros((n_users, 2 * n_nodes))
+
+        start_time = time.time()
+        origin_nearest = self._find_k_nearest_nodes(user_locations[0].origin_coords)
+        end_time = time.time()
+        print(f"Time taken for _find_k_nearest_nodes: {end_time - start_time:.4f} seconds")
         
-        print(f"Building feature matrix for {n_users} users...")
-        
-        for i, user in enumerate(user_locations):
-            if i % 10 == 0:  # Progress indicator
-                print(f"Processing user {i+1}/{n_users}")
-                
+        for user_idx, user in enumerate(user_locations):
             # Process origin
-            origin_indices, origin_distances = self._find_closest_nodes(
-                user.origin_lat, user.origin_lng
-            )
+            origin_nearest = self._find_k_nearest_nodes(user.origin_coords)
+            origin_distances = [dist for _, dist in origin_nearest]
             origin_weights = self._normalize_distances(origin_distances)
             
-            # Place origin weights in first half of columns
-            for idx, weight in zip(origin_indices, origin_weights):
-                feature_matrix[i, idx] = weight
+            for (node, _), weight in zip(origin_nearest, origin_weights):
+                node_idx = self.node_to_idx[node]
+                matrix[user_idx, node_idx] = weight  # Origin columns
             
             # Process destination
-            dest_indices, dest_distances = self._find_closest_nodes(
-                user.destination_lat, user.destination_lng
-            )
+            dest_nearest = self._find_k_nearest_nodes(user.destination_coords)
+            dest_distances = [dist for _, dist in dest_nearest]
             dest_weights = self._normalize_distances(dest_distances)
             
-            # Place destination weights in second half of columns
-            for idx, weight in zip(dest_indices, dest_weights):
-                feature_matrix[i, n_nodes + idx] = weight
+            for (node, _), weight in zip(dest_nearest, dest_weights):
+                node_idx = self.node_to_idx[node]
+                matrix[user_idx, n_nodes + node_idx] = weight  # Destination columns
         
-        self.feature_matrix = feature_matrix
-        print("Feature matrix built successfully")
-        return feature_matrix
+        return matrix
     
-    def compute_similarity_matrix(self) -> np.ndarray:
-        """
-        Compute similarity matrix using inner product (MIPS).
+    def _calculate_meeting_points(self, users: List[UserLocation]) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+        """Calculate meeting points for origin and destination."""
+        if not users:
+            return None, None
         
-        Returns:
-            Similarity matrix of shape (n_users, n_users)
-        """
-        if self.feature_matrix is None:
-            raise ValueError("Feature matrix not built. Call build_feature_matrix first.")
+        # Calculate centroid for origins
+        origin_lats = [u.origin_lat for u in users]
+        origin_lngs = [u.origin_lng for u in users]
+        origin_meeting = (np.mean(origin_lats), np.mean(origin_lngs))
         
-        # Normalize feature vectors for better similarity computation
-        normalized_features = normalize(self.feature_matrix, norm='l2')
+        # Calculate centroid for destinations
+        dest_lats = [u.destination_lat for u in users]
+        dest_lngs = [u.destination_lng for u in users]
+        dest_meeting = (np.mean(dest_lats), np.mean(dest_lngs))
         
-        # Compute inner product similarity
-        similarity_matrix = np.dot(normalized_features, normalized_features.T)
-        
-        return similarity_matrix
-    
-    def _calculate_meeting_point(self, locations: List[Tuple[float, float]]) -> Tuple[float, float]:
-        """
-        Calculate centroid meeting point for a list of locations.
-        
-        Args:
-            locations: List of (lat, lng) tuples
-            
-        Returns:
-            Centroid coordinates as (lat, lng)
-        """
-        if not locations:
-            return None
-            
-        avg_lat = sum(loc[0] for loc in locations) / len(locations)
-        avg_lng = sum(loc[1] for loc in locations) / len(locations)
-        
-        return (avg_lat, avg_lng)
+        return origin_meeting, dest_meeting
     
     def cluster_users(self, user_locations: List[UserLocation]) -> List[ClusterGroup]:
         """
-        Find similar user groups using spatial similarity.
+        Main clustering function that groups similar users.
         
         Args:
-            user_locations: List of user locations
+            user_locations: List of UserLocation objects
             
         Returns:
             List of ClusterGroup objects
         """
-        # Build feature matrix
-        self.build_feature_matrix(user_locations)
+        if len(user_locations) < 2:
+            return []
         
-        # Compute similarity matrix
-        similarity_matrix = self.compute_similarity_matrix()
+        print(f"Clustering {len(user_locations)} users...")
         
+        # Create feature matrix
+        
+        start_time = time.time()
+        feature_matrix = self._create_feature_matrix(user_locations)
+        end_time = time.time()
+        print(f"Time taken for feature_matrix: {end_time - start_time:.4f} seconds")
+        
+        # Calculate similarity matrix using cosine similarity (approximates MIPS for normalized vectors)
+        similarity_matrix = cosine_similarity(feature_matrix)
+        
+        # Find groups
         groups = []
         used_users = set()
         
-        print(f"Finding groups with similarity threshold: {self.similarity_threshold}")
-        
+        start_time = time.time()
         for i, user1 in enumerate(user_locations):
             if user1.user_id in used_users:
                 continue
-                
+            
             # Find most similar users
             similarities = similarity_matrix[i]
+            similar_indices = []
             
-            # Get indices sorted by similarity (excluding self)
-            similar_indices = np.argsort(similarities)[::-1]
+            for j, sim in enumerate(similarities):
+                if i != j and sim >= self.similarity_threshold and user_locations[j].user_id not in used_users:
+                    similar_indices.append((j, sim))
             
-            group_users = [user1]
-            group_similarities = []
+            # Sort by similarity
+            similar_indices.sort(key=lambda x: x[1], reverse=True)
             
-            for j in similar_indices:
-                if j == i:  # Skip self
-                    continue
-                    
-                user2 = user_locations[j]
-                similarity_score = similarities[j]
+            # Form groups of up to 3 users
+            if similar_indices:
+                group_users = [user1]
+                used_users.add(user1.user_id)
                 
-                if (user2.user_id not in used_users and 
-                    similarity_score >= self.similarity_threshold and 
-                    len(group_users) < 3):
-                    
-                    group_users.append(user2)
-                    group_similarities.append(similarity_score)
-                    
-                    if len(group_users) == 3:
-                        break
-            
-            # Create group if we have at least 2 users with sufficient similarity
-            if len(group_users) >= 2:
+                # Add up to 2 more users
+                for j, sim in similar_indices[:2]:
+                    if user_locations[j].user_id not in used_users:
+                        group_users.append(user_locations[j])
+                        used_users.add(user_locations[j].user_id)
+                
                 # Calculate meeting points
-                origin_coords = [user.origin_coords for user in group_users]
-                dest_coords = [user.destination_coords for user in group_users]
-                
-                origin_meeting = self._calculate_meeting_point(origin_coords)
-                dest_meeting = self._calculate_meeting_point(dest_coords)
+                origin_meeting, dest_meeting = self._calculate_meeting_points(group_users)
                 
                 # Create group
                 group_id = f"group_{'_'.join(str(u.user_id) for u in group_users)}_{int(time.time())}"
-                
                 group = ClusterGroup(
                     group_id=group_id,
                     users=group_users,
@@ -501,55 +389,12 @@ class SpatialSimilarityMatcher:
                     meeting_point_destination=dest_meeting,
                     status="complete" if len(group_users) == 3 else "forming"
                 )
-                
                 groups.append(group)
-                
-                # Mark users as used
-                for user in group_users:
-                    used_users.add(user.user_id)
-                
-                avg_similarity = f"{np.mean(group_similarities):.3f}" if group_similarities else "N/A"
-                print(f"Created group {group_id} with {len(group_users)} users (avg similarity: {avg_similarity})")
-
-        
-        print(f"Found {len(groups)} groups total")
+        end_time = time.time()
+        print(f"Time taken for gouping: {end_time - start_time:.4f} seconds")
+        print(f"Created {len(groups)} groups")
         return groups
-    
-    def get_user_recommendations(self, target_user: UserLocation, 
-                               all_users: List[UserLocation], 
-                               n_recommendations: int = 5) -> List[Tuple[UserLocation, float]]:
-        """
-        Get top N similar users for a target user.
-        
-        Args:
-            target_user: The user to find recommendations for
-            all_users: All available users
-            n_recommendations: Number of recommendations to return
-            
-        Returns:
-            List of (UserLocation, similarity_score) tuples
-        """
-        # Build feature matrix including target user
-        extended_users = [target_user] + [u for u in all_users if u.user_id != target_user.user_id]
-        self.build_feature_matrix(extended_users)
-        
-        # Compute similarity
-        similarity_matrix = self.compute_similarity_matrix()
-        
-        # Get similarities for target user (first row)
-        target_similarities = similarity_matrix[0, 1:]  # Exclude self-similarity
-        
-        # Get top N recommendations
-        top_indices = np.argsort(target_similarities)[::-1][:n_recommendations]
-        
-        recommendations = []
-        for idx in top_indices:
-            similar_user = all_users[idx]
-            similarity_score = target_similarities[idx]
-            recommendations.append((similar_user, similarity_score))
-        
-        return recommendations
-    
+
 
 class ClusteringService:
     """Main clustering service that runs in background threads"""
@@ -558,7 +403,7 @@ class ClusteringService:
         self.clustering_interval = clustering_interval
         self.max_wait_time = max_wait_time
         # i need this class
-        self.clusterer = SpatialSimilarityMatcher()
+        self.clusterer = SpatialClusteringSystem()
         
         # Thread-safe data structures
         self._lock = threading.RLock()
@@ -638,7 +483,7 @@ class ClusteringService:
                 if len(available_users) >= 3:
                     # Perform clustering
                     start_time = time.time()
-                    new_groups = self.clusterer.cluster_users(available_users)
+                    new_groups = self.clusterer.cluster_users(recent_locations)
                     end_time = time.time()
                     print(f"Time taken: {end_time - start_time:.4f} seconds")
 
@@ -658,9 +503,6 @@ class ClusteringService:
                             'users': group.get_user_ids(),
                             'group_data': group.to_dict()
                         })
-                        
-                # Clean up expired groups
-                self._cleanup_expired_groups()
 
             # except Exception as e:
             #     logger.error(f"Error in clustering worker: {e}")
@@ -670,28 +512,6 @@ class ClusteringService:
 
         logger.info("Clustering worker stopped")
 
-    def _cleanup_expired_groups(self):
-        """Clean up expired incomplete groups"""
-        current_time = datetime.now(timezone.utc)
-        expired_groups = []
-
-        with self._lock:
-            for group_id, group in self.active_groups.items():
-                if (not group.is_complete() and 
-                    (current_time - group.created_at).total_seconds() > self.max_wait_time):
-                    expired_groups.append(group_id)
-
-            for group_id in expired_groups:
-                group = self.active_groups[group_id]
-                for user in group.users:
-                    if user.user_id in self.user_to_group:
-                        del self.user_to_group[user.user_id]
-                del self.active_groups[group_id]
-
-        # Notify observers (outside of lock)
-        for group_id in expired_groups:
-            self._notify_observers('group_expired', {'group_id': group_id})
-            logger.info(f"Expired incomplete group {group_id}")
 
     def start(self):
         """Start the clustering service"""

@@ -557,6 +557,7 @@ class MapManager {
 
     setupMapEventListeners() {
         this.map.on('click', async (e) => {
+            console.log(e)
             if (!this.originMarker) {
                 this.addMarker([e.latlng.lat, e.latlng.lng], 'origin');
                 
