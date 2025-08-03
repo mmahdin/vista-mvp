@@ -512,7 +512,6 @@ class ClusteringService:
 
         logger.info("Clustering worker stopped")
 
-
     def start(self):
         """Start the clustering service"""
         if self._thread is not None and self._thread.is_alive():
