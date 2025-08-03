@@ -18,6 +18,8 @@ import queue
 import time
 from sklearn.neighbors import BallTree
 import pickle
+import itertools
+import time
 
 from app.database import get_db, SessionLocal
 from app.database.models import *
@@ -165,24 +167,16 @@ class FastBucketAssigner:
         return dict(od_buckets)
 
 
-class EfficientRideShareClusterer:
-    """Efficient ride share clustering using spatial buckets"""
-    
-    def __init__(self, 
-                 buckets_file_path: str = '/home/mahdi/Documents/startup/carpooling/v3/vista-mvp/fastapi/buckets1_data.pkl',
-                 min_group_size: int = 2, 
-                 max_group_size: int = 8):
+class PreciseUserGrouper:
+    def __init__(self, max_walking_distance_km: float = 0.5):
         """
-        Initialize the clusterer with bucket data
+        Initialize the grouper.
         
         Args:
-            buckets_file_path: Path to the pickle file containing bucket data
-            min_group_size: Minimum number of users required to form a group
-            max_group_size: Maximum number of users allowed in a group
+            max_walking_distance_km: Maximum acceptable walking distance between users in km
         """
-        self.buckets_file_path = buckets_file_path
-        self.min_group_size = min_group_size
-        self.max_group_size = max_group_size
+        self.max_walking_distance_km = max_walking_distance_km
+        self.buckets_file_path = '/home/mahdi/Documents/startup/carpooling/v3/vista-mvp/fastapi/buckets1_data.pkl'
         
         # Load buckets
         self._load_buckets()
@@ -206,139 +200,221 @@ class EfficientRideShareClusterer:
             logger.error(f"Error loading bucket file: {e}")
             raise
     
-    def cluster_users(self, available_users: List[UserLocation]) -> Dict[str, ClusterGroup]:
+    def calculate_walking_distance(self, point1: Tuple[float, float], point2: Tuple[float, float]) -> float:
+        """Calculate walking distance between two points in kilometers."""
+        return geodesic(point1, point2).kilometers
+    
+    def calculate_user_distance(self, user1: UserLocation, user2: UserLocation) -> float:
         """
-        Main clustering function that groups users by origin-destination bucket pairs
-        
-        Args:
-            available_users: List of UserLocation objects to cluster
-            
-        Returns:
-            Dictionary mapping group_id to ClusterGroup objects
+        Calculate the total walking distance between two users.
+        This considers both origin-to-origin and destination-to-destination distances.
         """
-        if not available_users:
-            logger.debug("No users provided for clustering")
-            return {}
+        origin_distance = self.calculate_walking_distance(
+            (user1.origin_lat, user1.origin_lng),
+            (user2.origin_lat, user2.origin_lng)
+        )
+        dest_distance = self.calculate_walking_distance(
+            (user1.destination_lat, user1.destination_lng),
+            (user2.destination_lat, user2.destination_lng)
+        )
+        # Return average of origin and destination distances
+        return (origin_distance + dest_distance) / 2
+    
+    def calculate_group_cohesion(self, users: List[UserLocation]) -> float:
+        """
+        Calculate the cohesion score for a group of users.
+        Lower score means users are closer to each other.
+        """
+        if len(users) < 2:
+            return 0.0
         
-        logger.debug(f"Clustering {len(available_users)} users")
+        total_distance = 0.0
+        pair_count = 0
         
-        try:
-            # Assign users to origin-destination bucket pairs
-            od_assignments = self.bucket_assigner.assign_users_to_od_buckets(available_users)
-            cnt = 0
-            for key, value in od_assignments.items():
-                cnt += len(value)
-
-            # Create cluster groups
-            cluster_groups = {}
-            current_time = datetime.now()
+        for i in range(len(users)):
+            for j in range(i + 1, len(users)):
+                total_distance += self.calculate_user_distance(users[i], users[j])
+                pair_count += 1
+        
+        return total_distance / pair_count if pair_count > 0 else 0.0
+    
+    def calculate_meeting_points(self, users: List[UserLocation]) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+        """Calculate optimal meeting points for origin and destination."""
+        if not users:
+            return (0.0, 0.0), (0.0, 0.0)
+        
+        # Calculate centroid for origins
+        origin_lats = [u.origin_lat for u in users]
+        origin_lngs = [u.origin_lng for u in users]
+        origin_meeting = (
+            sum(origin_lats) / len(origin_lats),
+            sum(origin_lngs) / len(origin_lngs)
+        )
+        
+        # Calculate centroid for destinations
+        dest_lats = [u.destination_lat for u in users]
+        dest_lngs = [u.destination_lng for u in users]
+        dest_meeting = (
+            sum(dest_lats) / len(dest_lats),
+            sum(dest_lngs) / len(dest_lngs)
+        )
+        
+        return origin_meeting, dest_meeting
+    
+    def find_optimal_groups_greedy(self, users: List[UserLocation]) -> List[List[UserLocation]]:
+        """
+        Find optimal groups using a greedy approach.
+        This is more efficient for larger user sets.
+        """
+        if len(users) <= 3:
+            return [users] if users else []
+        
+        remaining_users = users.copy()
+        groups = []
+        
+        while len(remaining_users) >= 3:
+            best_group = None
+            best_cohesion = float('inf')
+            best_indices = None
             
-            for (origin_bucket_id, dest_bucket_id), users in od_assignments.items():
-                # Only create groups that meet minimum size requirement
-                if len(users) >= self.min_group_size:
-                    # Split large groups if they exceed max_group_size
-                    user_chunks = self._split_users_into_chunks(users, self.max_group_size)
+            # Try all combinations of 3 users from remaining users
+            for i in range(len(remaining_users)):
+                for j in range(i + 1, len(remaining_users)):
+                    for k in range(j + 1, len(remaining_users)):
+                        candidate_group = [remaining_users[i], remaining_users[j], remaining_users[k]]
+                        cohesion = self.calculate_group_cohesion(candidate_group)
+                        
+                        if cohesion < best_cohesion:
+                            best_cohesion = cohesion
+                            best_group = candidate_group
+                            best_indices = [i, j, k]
+            
+            if best_group and best_cohesion <= self.max_walking_distance_km:
+                groups.append(best_group)
+                # Remove users from remaining list (in reverse order to maintain indices)
+                for idx in sorted(best_indices, reverse=True):
+                    remaining_users.pop(idx)
+            else:
+                # If no good group found, break to avoid infinite loop
+                break
+        
+        # Handle remaining users (less than 3 or couldn't form good groups)
+        if remaining_users:
+            if len(remaining_users) >= 2:
+                groups.append(remaining_users)
+            else:
+                # Single user - add to last group if it has space, otherwise create new group
+                if groups and len(groups[-1]) < 3:
+                    groups[-1].extend(remaining_users)
+                else:
+                    groups.append(remaining_users)
+        
+        return groups
+    
+    def find_optimal_groups_exhaustive(self, users: List[UserLocation]) -> List[List[UserLocation]]:
+        """
+        Find optimal groups using exhaustive search.
+        Use this for smaller user sets (< 10 users) for best results.
+        """
+        if len(users) <= 3:
+            return [users] if users else []
+        
+        n = len(users)
+        best_groups = None
+        best_total_cohesion = float('inf')
+        
+        # Generate all possible ways to partition users into groups of 3
+        for partition in self._generate_partitions(list(range(n)), 3):
+            total_cohesion = 0.0
+            valid_partition = True
+            
+            for group_indices in partition:
+                if len(group_indices) < 2:
+                    continue
                     
-                    for i, chunk in enumerate(user_chunks):
-                        if len(chunk) >= self.min_group_size:  # Ensure chunks still meet minimum size
-                            group_id = f"group_{origin_bucket_id}_{dest_bucket_id}_{i}"
-                            
-                            cluster_group = ClusterGroup(
-                                group_id=group_id,
-                                users=chunk,
-                                created_at=current_time,
-                                status='forming'
-                            )
-                            
-                            cluster_groups[group_id] = cluster_group
+                group_users = [users[i] for i in group_indices]
+                cohesion = self.calculate_group_cohesion(group_users)
+                
+                if len(group_indices) == 3 and cohesion > self.max_walking_distance_km:
+                    valid_partition = False
+                    break
+                
+                total_cohesion += cohesion
             
-            # Log clustering statistics
-            total_grouped_users = sum(len(group.users) for group in cluster_groups.values())
-            ungrouped_users = len(available_users) - total_grouped_users
-            
-            logger.info(f"Clustering complete: {len(cluster_groups)} groups created, "
-                       f"{total_grouped_users} users grouped, {ungrouped_users} users ungrouped")
-            
-            return cluster_groups
-            
-        except Exception as e:
-            logger.error(f"Error during clustering: {e}")
-            return {}
-    
-    def _split_users_into_chunks(self, users: List[UserLocation], max_chunk_size: int) -> List[List[UserLocation]]:
-        """Split a list of users into chunks of maximum size"""
-        chunks = []
-        for i in range(0, len(users), max_chunk_size):
-            chunks.append(users[i:i + max_chunk_size])
-        return chunks
-    
-    def get_clustering_statistics(self, available_users: List[UserLocation]) -> Dict:
-        """
-        Get detailed statistics about the clustering results
+            if valid_partition and total_cohesion < best_total_cohesion:
+                best_total_cohesion = total_cohesion
+                best_groups = [[users[i] for i in group_indices] for group_indices in partition]
         
-        Args:
-            available_users: List of UserLocation objects
-            
-        Returns:
-            Dictionary containing clustering statistics
-        """
-        if not available_users:
-            return {
-                'total_users': 0,
-                'assigned_users': 0,
-                'unassigned_users': 0,
-                'unique_od_pairs': 0,
-                'potential_groups': 0,
-                'od_pair_details': []
-            }
+        return best_groups or [users]
+    
+    def _generate_partitions(self, items: List[int], group_size: int) -> List[List[List[int]]]:
+        """Generate all possible partitions of items into groups of specified size."""
+        if not items:
+            return [[]]
         
+        if len(items) < group_size:
+            return [[items]]
+        
+        partitions = []
+        
+        # Try to form a group of the specified size
+        for combo in itertools.combinations(items, group_size):
+            remaining = [x for x in items if x not in combo]
+            for sub_partition in self._generate_partitions(remaining, group_size):
+                partitions.append([list(combo)] + sub_partition)
+        
+        # Also try with remaining items as a single group (if not empty)
+        if len(items) != group_size:
+            partitions.append([items])
+        
+        return partitions
+    
+    def cluster_users(self, available_users: List[UserLocation]) -> List[ClusterGroup]:
+        """
+        Main method to create cluster groups from OD assignments.
+        """
         od_assignments = self.bucket_assigner.assign_users_to_od_buckets(available_users)
-        
-        total_assigned = sum(len(user_list) for user_list in od_assignments.values())
-        potential_groups = sum(1 for user_list in od_assignments.values() if len(user_list) >= self.min_group_size)
-        
-        od_pair_details = [
-            {
-                'origin_bucket': origin_bucket,
-                'dest_bucket': dest_bucket,
-                'user_count': len(user_list),
-                'can_form_group': len(user_list) >= self.min_group_size,
-                'user_ids': [u.user_id for u in user_list]
-            }
-            for (origin_bucket, dest_bucket), user_list in od_assignments.items()
-        ]
-        
-        return {
-            'total_users': len(available_users),
-            'assigned_users': total_assigned,
-            'unassigned_users': len(available_users) - total_assigned,
-            'unique_od_pairs': len(od_assignments),
-            'potential_groups': potential_groups,
-            'od_pair_details': od_pair_details
-        }
-    
-    def find_user_bucket_assignment(self, user: UserLocation) -> Tuple[int, int]:
-        """
-        Find the origin and destination bucket IDs for a specific user
-        
-        Args:
-            user: UserLocation object
-            
-        Returns:
-            Tuple of (origin_bucket_id, dest_bucket_id) or (-1, -1) if not found
-        """
-        origin_bucket = self.bucket_assigner.find_bucket_for_point(user.origin_lat, user.origin_lng)
-        dest_bucket = self.bucket_assigner.find_bucket_for_point(user.destination_lat, user.destination_lng)
-        
-        return (origin_bucket, dest_bucket)
-    
-    def reload_buckets(self):
-        """Reload bucket data from file (useful for dynamic updates)"""
-        logger.info("Reloading bucket data...")
-        self._load_buckets()
-        self.bucket_assigner = FastBucketAssigner(self.kmeans_buckets)
-        logger.info("Bucket data reloaded successfully")
 
+        groups = []
+        
+        for (origin_bucket, dest_bucket), users in od_assignments.items():
+            if not users:
+                continue
+            
+            # Choose algorithm based on user count
+            if len(users) <= 9:  # Use exhaustive for small groups
+                optimal_groups = self.find_optimal_groups_exhaustive(users)
+            else:  # Use greedy for larger groups
+                optimal_groups = self.find_optimal_groups_greedy(users)
+            
+            # Create ClusterGroup objects
+            for group_users in optimal_groups:
+                if not group_users:
+                    continue
+                
+                # Calculate meeting points
+                origin_meeting, dest_meeting = self.calculate_meeting_points(group_users)
+                
+                # Generate group ID
+                user_ids = sorted([u.user_id for u in group_users])
+                group_id = f"group_{'_'.join(map(str, user_ids))}_{int(time.time())}"
+                
+                # Determine status
+                status = "complete" if len(group_users) == 3 else "forming"
+                
+                group = ClusterGroup(
+                    group_id=group_id,
+                    users=group_users,
+                    created_at=datetime.now(timezone.utc),
+                    meeting_point_origin=origin_meeting,
+                    meeting_point_destination=dest_meeting,
+                    status=status
+                )
+                
+                groups.append(group)
+        
+        return groups
+    
 
 class ClusteringService:
     """Main clustering service that runs in background threads"""
@@ -347,7 +423,7 @@ class ClusteringService:
         self.clustering_interval = clustering_interval
         self.max_wait_time = max_wait_time
         # i need this class
-        self.clusterer = EfficientRideShareClusterer()
+        self.clusterer = PreciseUserGrouper()
         
         # Thread-safe data structures
         self._lock = threading.RLock()
@@ -375,6 +451,7 @@ class ClusteringService:
 
     def _notify_observers(self, event_type: str, data: dict):
         """Notify all observers of changes"""
+        print(data['users'])
         with self._lock:
             observers = self._observers.copy()
         
@@ -425,7 +502,10 @@ class ClusteringService:
 
                 if len(available_users) >= 3:
                     # Perform clustering
+                    start_time = time.time()
                     new_groups = self.clusterer.cluster_users(available_users)
+                    end_time = time.time()
+                    print(f"Time taken: {end_time - start_time:.4f} seconds")
 
                     # Process new groups
                     with self._lock:
@@ -444,8 +524,6 @@ class ClusteringService:
                             'group_data': group.to_dict()
                         })
                         
-                        logger.info(f"Formed new group {group.group_id} with users: {group.get_user_ids()}")
-
                 # Clean up expired groups
                 self._cleanup_expired_groups()
 

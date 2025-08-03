@@ -73,7 +73,6 @@ class LocationHistoryCreate(BaseModel):
 
 
 class LocationHistoryResponse(BaseModel):
-    id: int
     user_id: int
     origin_lat: float
     origin_lng: float
@@ -90,7 +89,7 @@ async def save_location_history(
     location_data: LocationHistoryCreate,
     db: Annotated[Session, Depends(get_db)]
 ):
-    try:
+    # try:
         # Check if user exists
         user = db.query(User).filter(User.id == location_data.user_id).first()
         if not user:
@@ -113,46 +112,57 @@ async def save_location_history(
         data = clustering_service.get_user_companions(user.id)
         print(f'companions: {data}')
         print(f'get_service_status: {clustering_service.get_service_status()}')
-        print(f'get_all_active_groups: {clustering_service.get_all_active_groups()}')
+        
+        ride_users = []
+        if data is not None:
+            for comp in data['companions']:
+                ride_users.append({
+                    "user_id": comp['user_id'],
+                    "origin_lat": comp['origin_lat'],
+                    "origin_lng": comp['origin_lng'],
+                    "destination_lat": comp['destination_lat'],
+                    "destination_lng": comp['destination_lng'],
+                    "stored_at": comp['stored_at']
+                })
+
         print('****************************************')
 
-        # Get locations and calculate groups
-        df_locations = get_all_locations_as_dataframe(db)
-        meeting_points, groups = get_od_meeting_points(
-            df_locations,
-            group_size=3,
-            origin_weight=0.6,
-            dest_weight=0.4,
-            max_distance=800
-        )
+        # # Get locations and calculate groups
+        # df_locations = get_all_locations_as_dataframe(db)
+        # meeting_points, groups = get_od_meeting_points(
+        #     df_locations,
+        #     group_size=3,
+        #     origin_weight=0.6,
+        #     dest_weight=0.4,
+        #     max_distance=800
+        # )
 
-        # Find groups containing the current user
-        matching_groups = [lst for lst in groups if user.id in lst][0]
-        matching_groups.remove(user.id)
+        # # Find groups containing the current user
+        # matching_groups = [lst for lst in groups if user.id in lst][0]
+        # matching_groups.remove(user.id)
 
-        ride_users = []
+        # ride_users = []
 
-        # Process each matching group
-        for idx in matching_groups:
-            location = df_locations[df_locations['user_id'] == idx].squeeze()
-            ride_users.append({
-                "id": location.id,
-                "user_id": location.user_id,
-                "origin_lat": location.origin_lat,
-                "origin_lng": location.origin_lng,
-                "destination_lat": location.destination_lat,
-                "destination_lng": location.destination_lng,
-                "stored_at": location.stored_at
-            })
+        # # Process each matching group
+        # for idx in matching_groups:
+        #     location = df_locations[df_locations['user_id'] == idx].squeeze()
+        #     ride_users.append({
+        #         "user_id": location.usercompanions_id,
+        #         "origin_lat": location.origin_lat,
+        #         "origin_lng": location.origin_lng,
+        #         "destination_lat": location.destination_lat,
+        #         "destination_lng": location.destination_lng,
+        #         "stored_at": location.stored_at
+        #     })
         return ride_users
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error saving location: {str(e)}"
-        )
+    # except HTTPException:
+    #     raise
+    # except Exception as e:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    #         detail=f"Error saving location: {str(e)}"
+    #     )
 # =====================================================================================
 
 
@@ -166,7 +176,7 @@ async def get_random_locations(db: Session = Depends(get_db)):
 
         location_data = []
         for location in locations:
-            if location.user_id > 10000:
+            if location.user_id > 1:
                 location_data.append({
                     "id": location.id,
                     "user_id": location.user_id,
