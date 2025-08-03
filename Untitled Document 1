@@ -163,6 +163,7 @@ i look for fast algorithm like hasing. i mean, w
 
 
 
+
 لطفا فقط متن زیر رو به انگلیسی ترجمه کن:
 
 {
@@ -176,6 +177,7 @@ i look for fast algorithm like hasing. i mean, w
 self.bucket_assigner = FastBucketAssigner(self.kmeans_buckets)
 od_assignments = self.bucket_assigner.assign_users_to_od_buckets(available_users)
 برای هر گروه در od_assignments یک دسته بندی دقیق انجام بده و گروه های نهایی رو مشخص کنه. برای اینکار باید برای هر گروه توی od_assignments، بیاد فاصله پیاده روی بین مبدا و مقصد هر دو یوزر رو محاسبه کنه و سعی کنه یوزرهای هر گروه از od_assignments رو به چندین گروه سه نفره تقسیم کنه که کمترین فاصله رو به هم دارن.
+در نهایت باید خروجی به شکل زیر باشه:
 
 
 
@@ -183,6 +185,105 @@ od_assignments = self.bucket_assigner.assign_users_to_od_buckets(available_users
 
 
 
+
+I have a class that takes a list of buckets and a list of users and ultimately determines which bucket each user belongs to. The list of buckets looks like this:
+[Bucket(id=2, center_lat=np.float64(36.0292331375), center_lon=np.float64(50.8322946), node_count=8, nodes=[9524600425, 9524600433, 9524600445, 9524600459, 12009646132, 12009646138, 12009646139, 12009646140], bbox=(np.float64(36.0281474), np.float64(50.8314094), np.float64(36.0308628), np.float64(50.8345416))), ...]
+And the users look like this:
+[UserLocation(user_id=1, origin_lat=35.9725713, origin_lng=50.7328994, destination_lat=35.9591762, destination_lng=50.6883034, stored_at=datetime.datetime(2025, 8, 1, 22, 6, 31, 467604)), ....]
+Now, I want to write a class that, given the categorized users (od_assignments):
+self.bucket_assigner = FastBucketAssigner(self.kmeans_buckets)
+od_assignments = self.bucket_assigner.assign_users_to_od_buckets(available_users)
+performs a precise grouping for each group in od_assignments and determines the final groups. To do this, for each group in od_assignments, it should calculate the walking distance between the origin and destination of each pair of users and try to divide the users in each group from od_assignments into multiple three-person groups with the shortest distances to each other.
+The final output should be in the following format:
+groups = []
+@dataclass
+class ClusterGroup:
+    group_id: str
+    users: List[UserLocation]
+    created_at: datetime
+    meeting_point_origin: Optional[Tuple[float, float]] = None
+    meeting_point_destination: Optional[Tuple[float, float]] = None
+    status: str = "forming"  # forming, complete, expired
+    def is_complete(self) -> bool:
+        return len(self.users) == 3
+    def has_user(self, user_id: int) -> bool:
+        return any(u.user_id == user_id for u in self.users)
+    def get_user_ids(self) -> List[int]:
+        return [u.user_id for u in self.users]
+    def to_dict(self) -> Dict:
+        return {
+            'group_id': self.group_id,
+            'users': [user.to_dict() for user in self.users],
+            'created_at': self.created_at.isoformat(),
+            'meeting_point_origin': self.meeting_point_origin,
+            'meeting_point_destination': self.meeting_point_destination,
+            'status': self.status,
+            'user_count': len(self.users)
+        }
+group = ClusterGroup(
+group_id=f"group_{user1.user_id}_{best_pair.user_id}_{third_user.user_id}_{int(time.time())}",
+users=group_users,
+created_at=datetime.now(timezone.utc),
+meeting_point_origin=origin_meeting,
+meeting_point_destination=dest_meeting,
+status="complete"
+)
+groups.append(group)
+and this is my FastBucketAssigner class:
+class FastBucketAssigner:
+    def __init__(self, buckets: List[Bucket]):
+        self.buckets = buckets
+        self.num_buckets = len(buckets)
+        
+        # Create spatial index for fast lookup
+        self.bucket_ids = np.array([b.id for b in buckets])
+        self.min_lats = np.array([b.bbox[0] for b in buckets])
+        self.min_lons = np.array([b.bbox[1] for b in buckets])
+        self.max_lats = np.array([b.bbox[2] for b in buckets])
+        self.max_lons = np.array([b.bbox[3] for b in buckets])
+        
+        # Create a mapping from bucket_id to index for quick lookup
+        self.bucket_id_to_index = {bucket.id: i for i, bucket in enumerate(buckets)}
+
+    def get_nearest_node(self, lat, lon):
+        """
+        Given latitude and longitude, return the (lat, lon) of the nearest node in the graph G.
+        """
+        # Find the nearest node ID
+        nearest_node = ox.distance.nearest_nodes(G, X=lon, Y=lat)
+        
+        # Extract node coordinates
+        node_lat = G.nodes[nearest_node]['y']
+        node_lon = G.nodes[nearest_node]['x']
+        
+        return node_lat, node_lon
+        
+    def find_bucket_for_point(self, lat: float, lon: float) -> int:
+        """Find which bucket a point (lat, lon) belongs to. Returns bucket_id or -1 if not found."""
+        lat, lon = self.get_nearest_node(lat, lon)
+
+        inside_mask = (
+            (self.min_lats <= lat) & (lat <= self.max_lats) &
+            (self.min_lons <= lon) & (lon <= self.max_lons)
+        )
+        
+        indices = np.where(inside_mask)[0]
+        if len(indices) > 0:
+            return self.bucket_ids[indices[0]]
+        return -1
+    
+    def assign_users_to_od_buckets(self, users: List[UserLocation]) -> Dict[Tuple[int, int], List[UserLocation]]:
+        """Assign users to origin-destination bucket pairs."""
+        od_buckets = defaultdict(list)
+        
+        for user in users:
+            origin_bucket = self.find_bucket_for_point(user.origin_lat, user.origin_lng)
+            dest_bucket = self.find_bucket_for_point(user.destination_lat, user.destination_lng)
+            
+            if origin_bucket != -1 and dest_bucket != -1:
+                od_buckets[(origin_bucket, dest_bucket)].append(user)
+        
+        return dict(od_buckets)
 
 
 

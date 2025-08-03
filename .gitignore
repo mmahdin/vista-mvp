@@ -41,3 +41,5 @@ staticfiles/
 fastapi/rideshare.db
 rideshare.db
 cache/
+prcmd.pkl
+savojbolagh_precomputed_distances.pkl
