@@ -162,6 +162,7 @@ i look for fast algorithm like hasing. i mean, w
 
 
 
+
 لطفا فقط متن زیر رو به انگلیسی ترجمه کن:
 
 {
@@ -171,10 +172,16 @@ i look for fast algorithm like hasing. i mean, w
 و یوزرها هم شبیه این هستن:
 [UserLocation(user_id=1, origin_lat=35.9725713, origin_lng=50.7328994, destination_lat=35.9591762, destination_lng=50.6883034, stored_at=datetime.datetime(2025, 8, 1, 22, 6, 31, 467604)), ....]
 
+حالا من میخوایم یه کلاس بنویسم که با دریافت یوزرهای دسته بندی شده (od_assignments):
+self.bucket_assigner = FastBucketAssigner(self.kmeans_buckets)
+od_assignments = self.bucket_assigner.assign_users_to_od_buckets(available_users)
+برای هر گروه در od_assignments یک دسته بندی دقیق انجام بده و گروه های نهایی رو مشخص کنه. برای اینکار باید برای هر گروه توی od_assignments، بیاد فاصله پیاده روی بین مبدا و مقصد هر دو یوزر رو محاسبه کنه و سعی کنه یوزرهای هر گروه از od_assignments رو به چندین گروه سه نفره تقسیم کنه که کمترین فاصله رو به هم دارن.
 
 
 
 }
+
+
 
 
 
