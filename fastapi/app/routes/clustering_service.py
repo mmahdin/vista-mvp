@@ -26,6 +26,7 @@ from scipy.sparse import csr_matrix, lil_matrix
 from sklearn.metrics.pairwise import linear_kernel
 from scipy.spatial import cKDTree
 from sklearn.metrics.pairwise import cosine_similarity
+from .connection_manager import connection_manager 
 
 from app.database import get_db, SessionLocal
 from app.database.models import *
@@ -100,7 +101,7 @@ class ClusterGroup:
 
 class SpatialClusteringSystem:
     def __init__(self, place: str = "Savojbolagh Central District, Savojbolagh County, Alborz Province, Iran", 
-                 k_nearest: int = 100, similarity_threshold: float = 0.3,
+                 k_nearest: int = 100, similarity_threshold: float = 0.2,
                  cache_file: str = "spatial_cache.pkl"):
         """
         Initialize the spatial clustering system.
@@ -276,6 +277,7 @@ class SpatialClusteringSystem:
         
         # Matrix with 2n columns (n for origins, n for destinations)
         matrix = np.zeros((n_users, 2 * n_nodes))
+        selected_rows = []
 
         start_time = time.time()
         origin_nearest = self._find_k_nearest_nodes(user_locations[0].origin_coords)
@@ -292,6 +294,11 @@ class SpatialClusteringSystem:
                 node_idx = self.node_to_idx[node]
                 matrix[user_idx, node_idx] = weight  # Origin columns
             
+            if user.user_id == 1 or user.user_id == 2:
+                print(f' user_id {user.user_id} is {user_idx}')
+                selected_rows.append(matrix[user_idx])
+
+            
             # Process destination
             dest_nearest = self._find_k_nearest_nodes(user.destination_coords)
             dest_distances = [dist for _, dist in dest_nearest]
@@ -301,6 +308,8 @@ class SpatialClusteringSystem:
                 node_idx = self.node_to_idx[node]
                 matrix[user_idx, n_nodes + node_idx] = weight  # Destination columns
         
+        # selected_rows = np.array(selected_rows)
+        # np.savetxt("selected_rows.csv", selected_rows, delimiter=",")
         return matrix
     
     def _calculate_meeting_points(self, users: List[UserLocation]) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
@@ -344,7 +353,8 @@ class SpatialClusteringSystem:
         
         # Calculate similarity matrix using cosine similarity (approximates MIPS for normalized vectors)
         similarity_matrix = cosine_similarity(feature_matrix)
-        
+        print(feature_matrix.shape)
+        print(f'*********************** {similarity_matrix.shape}')
         # Find groups
         groups = []
         used_users = set()
@@ -399,7 +409,7 @@ class SpatialClusteringSystem:
 class ClusteringService:
     """Main clustering service that runs in background threads"""
 
-    def __init__(self, clustering_interval: int = 30, max_wait_time: int = 300):
+    def __init__(self, clustering_interval: int = 5, max_wait_time: int = 300):
         self.clustering_interval = clustering_interval
         self.max_wait_time = max_wait_time
         # i need this class
@@ -504,6 +514,8 @@ class ClusteringService:
                             'group_data': group.to_dict()
                         })
 
+                        self._notify_group_via_websocket(group)
+
             # except Exception as e:
             #     logger.error(f"Error in clustering worker: {e}")
 
@@ -511,6 +523,50 @@ class ClusteringService:
                 self._stop_event.wait(self.clustering_interval)
 
         logger.info("Clustering worker stopped")
+
+    def _notify_group_via_websocket(self, group: ClusterGroup):
+        """Send WebSocket notifications to all users in a group"""
+        
+        for user in group.users:
+            # Get companions for this user (excluding themselves)
+            companions = [u for u in group.users if u.user_id != user.user_id]
+            
+            message = {
+                'type': 'group_formed',
+                'group_id': group.group_id,
+                'companions': [
+                    {
+                        'user_id': comp.user_id,
+                        'origin_lat': comp.origin_lat,
+                        'origin_lng': comp.origin_lng,
+                        'destination_lat': comp.destination_lat,
+                        'destination_lng': comp.destination_lng,
+                        'stored_at': comp.stored_at.isoformat()
+                    }
+                    for comp in companions
+                ],
+                'meeting_point_origin': group.meeting_point_origin,
+                'meeting_point_destination': group.meeting_point_destination,
+                'created_at': group.created_at.isoformat()
+            }
+            
+            # Schedule WebSocket notification
+            self._executor.submit(self._send_websocket_message, user.user_id, message)
+
+    def _send_websocket_message(self, user_id: int, message: dict):
+        """Helper method to send WebSocket message"""
+        try:            
+            # Create new event loop for this thread if needed
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # Send the message
+            loop.run_until_complete(connection_manager.send_group_update(user_id, message))
+        except Exception as e:
+            logger.error(f"Error sending WebSocket message to user {user_id}: {e}")
 
     def start(self):
         """Start the clustering service"""

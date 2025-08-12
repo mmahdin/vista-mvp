@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Request, HTTPException, status
 from fastapi.responses import HTMLResponse
 from app.dependencies import protected_route
 from app.templates_utils import templates
-from app.database.crud import create_location, get_all_locations_as_dataframe
+from app.database.crud import create_location, get_all_locations_as_dataframe, delete_location_by_user_id
 from app.database.base import get_db
 from app.database.models import *
 from typing import Annotated, List
@@ -37,9 +37,12 @@ class UserResponse(BaseModel):
 @router.get("/ride", response_class=HTMLResponse)
 async def ride_page(
     request: Request,
-    user=Depends(protected_route)
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(protected_route)],
 ):
-    await add_random_data()
+    # await add_random_data()
+
+    print(delete_location_by_user_id(db, user.id))
 
     user_response = UserResponse.model_validate(user)
     return templates.TemplateResponse("ride.html", {
@@ -62,6 +65,18 @@ async def request_ride(
 
 
 # =====================================================================================
+from .connection_manager import connection_manager 
+from fastapi import WebSocket, WebSocketDisconnect
+
+@router.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: int):
+    await connection_manager.connect(websocket, user_id)
+    try:
+        while True:
+            # Keep connection alive and handle any incoming messages if needed
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        connection_manager.disconnect(user_id)
 
 
 class LocationHistoryCreate(BaseModel):
@@ -108,24 +123,24 @@ async def save_location_history(
             destination_lng=location_data.destination_lng
         )
 
-        clustering_service = get_clustering_service()
-        data = clustering_service.get_user_companions(user.id)
-        print(f'companions: {data}')
-        print(f'get_service_status: {clustering_service.get_service_status()}')
+        # clustering_service = get_clustering_service()
+        # data = clustering_service.get_user_companions(user.id)
+        # print(f'companions: {data}')
+        # print(f'get_service_status: {clustering_service.get_service_status()}')
         
         ride_users = []
-        if data is not None:
-            for comp in data['companions']:
-                ride_users.append({
-                    "user_id": comp['user_id'],
-                    "origin_lat": comp['origin_lat'],
-                    "origin_lng": comp['origin_lng'],
-                    "destination_lat": comp['destination_lat'],
-                    "destination_lng": comp['destination_lng'],
-                    "stored_at": comp['stored_at']
-                })
+        # if data is not None:
+        #     for comp in data['companions']:
+        #         ride_users.append({
+        #             "user_id": comp['user_id'],
+        #             "origin_lat": comp['origin_lat'],
+        #             "origin_lng": comp['origin_lng'],
+        #             "destination_lat": comp['destination_lat'],
+        #             "destination_lng": comp['destination_lng'],
+        #             "stored_at": comp['stored_at']
+        #         })
 
-        print('****************************************')
+        # print('****************************************')
 
         # # Get locations and calculate groups
         # df_locations = get_all_locations_as_dataframe(db)

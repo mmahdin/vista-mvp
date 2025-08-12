@@ -823,9 +823,14 @@ class GroupManager {
         this.rideStatus = document.getElementById('ride-status');
         this.progressBar = document.getElementById('progress-bar');
         this.progressInterval = null;
+
+        this.websocket = null;
+        this.userId = typeof userData !== 'undefined' && userData.id ? userData.id : 1;
     }
 
     async requestGroup() {
+        this.initWebSocket()
+        
         const markers = this.mapManager.getMarkers();
         
         if (!markers.origin || !markers.destination) {
@@ -936,6 +941,79 @@ class GroupManager {
             throw error;
         }
     }
+
+    initWebSocket() {
+        const wsUrl = `ws://localhost:8000/ws/${this.userId}`; // Adjust the URL to match your backend
+        
+        this.websocket = new WebSocket(wsUrl);
+        
+        this.websocket.onopen = () => {
+            console.log('WebSocket connected');
+        };
+        
+        this.websocket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                this.handleWebSocketMessage(data);
+            } catch (error) {
+                console.error('Error parsing WebSocket message:', error);
+            }
+        };
+        
+        this.websocket.onclose = () => {
+            console.log('WebSocket disconnected');
+            // Optionally implement reconnection logic here
+        };
+        
+        this.websocket.onerror = (error) => {
+            console.error('WebSocket error:', error);
+        };
+    }
+
+    handleWebSocketMessage(data) {
+        if (data.type === 'group_formed') {
+            console.log('Group formed via WebSocket:', data);
+            
+            // Update the map with companion locations
+            this.displayGroupCompanions(data.companions);
+            
+            // Show notification
+            this.notificationManager.show(
+                `Group formed! Found ${data.companions.length} companion(s) for your ride.`
+            );
+            
+            // You can also update UI to show meeting points if needed
+            if (data.meeting_point_origin || data.meeting_point_destination) {
+                console.log('Meeting points:', {
+                    origin: data.meeting_point_origin,
+                    destination: data.meeting_point_destination
+                });
+            }
+        }
+    }
+
+    displayGroupCompanions(companions) {
+        // Convert companions to the format expected by displayGroupedRides
+        const groupedRides = companions.map(companion => ({
+            user_id: companion.user_id,
+            origin_lat: companion.origin_lat,
+            origin_lng: companion.origin_lng,
+            destination_lat: companion.destination_lat,
+            destination_lng: companion.destination_lng,
+            stored_at: companion.stored_at
+        }));
+        
+        // Display on map using existing method
+        this.mapManager.displayGroupedRides(groupedRides);
+    }
+
+    // Add cleanup method
+    closeWebSocket() {
+        if (this.websocket) {
+            this.websocket.close();
+            this.websocket = null;
+        }
+    }
 }
 
 // ============================================================================
@@ -1037,6 +1115,13 @@ class RideApp {
             }
             if (!destinationInput.contains(e.target) && !destinationSuggestions.contains(e.target)) {
                 destinationSuggestions.style.display = 'none';
+            }
+        });
+        
+        window.addEventListener('beforeunload', () => {
+            console.log('close the shet')
+            if (this.rideManager) {
+                this.rideManager.closeWebSocket();
             }
         });
     }
