@@ -27,6 +27,7 @@ from sklearn.metrics.pairwise import linear_kernel
 from scipy.spatial import cKDTree
 from sklearn.metrics.pairwise import cosine_similarity
 from .connection_manager import connection_manager 
+import math
 
 from app.database import get_db, SessionLocal
 from app.database.models import *
@@ -101,7 +102,7 @@ class ClusterGroup:
 
 class SpatialClusteringSystem:
     def __init__(self, place: str = "Savojbolagh Central District, Savojbolagh County, Alborz Province, Iran", 
-                 k_nearest: int = 100, similarity_threshold: float = 0.2,
+                 k_nearest: int = 100, similarity_threshold: float = 0.7,
                  cache_file: str = "spatial_cache.pkl"):
         """
         Initialize the spatial clustering system.
@@ -254,21 +255,21 @@ class SpatialClusteringSystem:
         # Return top k candidates
         return candidates[:self.k_nearest]
     
-    def _normalize_distances(self, distances: List[float]) -> List[float]:
-        """Normalize distances using inverse distance weighting."""
+    def _normalize_distances(self, distances: List[float], sigma: float = 500.0) -> List[float]:
+        """Convert distances to similarity weights using a Gaussian kernel.
+        
+        Args:
+            distances: list of distances in meters
+            sigma: scale parameter controlling decay rate (meters)
+        """
         if not distances:
             return []
-        
-        # Convert to similarities (inverse of distance + small epsilon)
-        epsilon = 1e-6
-        similarities = [1.0 / (d + epsilon) for d in distances]
-        
-        # Normalize to sum to 1
-        total = sum(similarities)
-        if total > 0:
-            return [s / total for s in similarities]
-        else:
-            return [1.0 / len(similarities)] * len(similarities)
+
+        # Gaussian kernel: sim = exp(-(d^2) / (2*sigma^2))
+        similarities = [math.exp(-(d ** 2) / (2 * sigma ** 2)) for d in distances]
+
+        # Keep magnitudes — no sum-to-1 normalization
+        return similarities
     
     def _create_feature_matrix(self, user_locations: List[UserLocation]) -> np.ndarray:
         """Create the bipartite feature matrix for users."""
@@ -277,7 +278,6 @@ class SpatialClusteringSystem:
         
         # Matrix with 2n columns (n for origins, n for destinations)
         matrix = np.zeros((n_users, 2 * n_nodes))
-        selected_rows = []
 
         start_time = time.time()
         origin_nearest = self._find_k_nearest_nodes(user_locations[0].origin_coords)
@@ -293,10 +293,6 @@ class SpatialClusteringSystem:
             for (node, _), weight in zip(origin_nearest, origin_weights):
                 node_idx = self.node_to_idx[node]
                 matrix[user_idx, node_idx] = weight  # Origin columns
-            
-            if user.user_id == 1 or user.user_id == 2:
-                print(f' user_id {user.user_id} is {user_idx}')
-                selected_rows.append(matrix[user_idx])
 
             
             # Process destination
@@ -307,9 +303,7 @@ class SpatialClusteringSystem:
             for (node, _), weight in zip(dest_nearest, dest_weights):
                 node_idx = self.node_to_idx[node]
                 matrix[user_idx, n_nodes + node_idx] = weight  # Destination columns
-        
-        # selected_rows = np.array(selected_rows)
-        # np.savetxt("selected_rows.csv", selected_rows, delimiter=",")
+
         return matrix
     
     def _calculate_meeting_points(self, users: List[UserLocation]) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
@@ -353,8 +347,7 @@ class SpatialClusteringSystem:
         
         # Calculate similarity matrix using cosine similarity (approximates MIPS for normalized vectors)
         similarity_matrix = cosine_similarity(feature_matrix)
-        print(feature_matrix.shape)
-        print(f'*********************** {similarity_matrix.shape}')
+
         # Find groups
         groups = []
         used_users = set()
