@@ -44,3 +44,5 @@ cache/
 prcmd.pkl
 savojbolagh_precomputed_distances.pkl
 spatial_cache.pkl
+
+./fastapi/*.png

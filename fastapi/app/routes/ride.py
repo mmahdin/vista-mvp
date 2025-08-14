@@ -9,10 +9,10 @@ from app.database.base import get_db
 from app.database.models import *
 from typing import Annotated, List
 from datetime import datetime, timezone
-from .utils import get_od_meeting_points
-from .utils import add_random_data
+from ..simulation.utils import get_od_meeting_points
+from ..simulation.utils import add_random_data
 
-from app.routes.clustering_service import (
+from app.service.clustering_service import (
     get_clustering_service, 
     start_clustering_service, 
     stop_clustering_service,
@@ -65,7 +65,7 @@ async def request_ride(
 
 
 # =====================================================================================
-from .connection_manager import connection_manager 
+from ..service.connection_manager import connection_manager 
 from fastapi import WebSocket, WebSocketDisconnect
 
 @router.websocket("/ws/{user_id}")

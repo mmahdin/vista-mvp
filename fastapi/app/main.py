@@ -8,7 +8,7 @@ from app.config import settings
 from sqlalchemy.orm import Session
 from app.database.crud import get_user_by_email, create_user
 from contextlib import asynccontextmanager
-from app.routes.clustering_service import (
+from app.service.clustering_service import (
     get_clustering_service, 
     start_clustering_service, 
     stop_clustering_service,
