@@ -9,7 +9,6 @@ from app.database.base import get_db
 from app.database.models import *
 from typing import Annotated, List
 from datetime import datetime, timezone
-from ..simulation.utils import get_od_meeting_points
 from ..simulation.utils import add_random_data
 
 from app.service.clustering_service import (
@@ -40,7 +39,7 @@ async def ride_page(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(protected_route)],
 ):
-    # await add_random_data()
+    await add_random_data()
 
     print(delete_location_by_user_id(db, user.id))
 
